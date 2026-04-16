@@ -248,10 +248,18 @@ let autoStartWithClaude = _settingsController.get("autoStartWithClaude");
 let openAtLogin = _settingsController.get("openAtLogin");
 let bubbleFollowPet = _settingsController.get("bubbleFollowPet");
 let hideBubbles = _settingsController.get("hideBubbles");
+let aiStuckBubbles = _settingsController.get("aiStuckBubbles");
+let aiDoneBubbles = _settingsController.get("aiDoneBubbles");
+let petOpacity = _settingsController.get("petOpacity");
 let showSessionId = _settingsController.get("showSessionId");
 let soundMuted = _settingsController.get("soundMuted");
 let petHidden = false;
 const DEFAULT_TOGGLE_SHORTCUT = "CommandOrControl+Shift+Alt+C";
+const CURSOR_TOOL_STUCK_MS = 15000;
+const CURSOR_AWAITING_USER_MS = 1800;
+const CODEX_STUCK_MS = 30000;
+const cursorToolStuckTimers = new Map();
+const cursorAwaitingUserTimers = new Map();
 
 function togglePetVisibility() {
   if (!win || win.isDestroyed()) return;
@@ -309,6 +317,17 @@ function sendToHitWin(channel, ...args) {
   if (hitWin && !hitWin.isDestroyed()) hitWin.webContents.send(channel, ...args);
 }
 
+function normalizePetOpacity(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return 1;
+  return Math.max(0.4, Math.min(1, n));
+}
+
+function applyPetOpacity() {
+  petOpacity = normalizePetOpacity(petOpacity);
+  if (win && !win.isDestroyed()) win.setOpacity(petOpacity);
+}
+
 function syncHitStateAfterLoad() {
   sendToHitWin("hit-state-sync", {
     currentSvg: _state.getCurrentSvg(),
@@ -355,6 +374,169 @@ function syncRendererStateAfterLoad({ includeStartupRecovery = true } = {}) {
   }, 5000);
 }
 
+function clearCursorToolStuck(sessionId) {
+  const timer = cursorToolStuckTimers.get(sessionId);
+  if (timer) clearTimeout(timer);
+  cursorToolStuckTimers.delete(sessionId);
+  clearAgentNotifyBubbles(sessionId, "cursor-tool-stuck");
+}
+
+function clearCursorAwaitingUser(sessionId) {
+  const timer = cursorAwaitingUserTimers.get(sessionId);
+  if (timer) clearTimeout(timer);
+  cursorAwaitingUserTimers.delete(sessionId);
+  clearAgentNotifyBubbles(sessionId, "cursor-awaiting-user");
+}
+
+function clearAllAgentNotifyState() {
+  for (const timer of cursorToolStuckTimers.values()) clearTimeout(timer);
+  cursorToolStuckTimers.clear();
+  for (const timer of cursorAwaitingUserTimers.values()) clearTimeout(timer);
+  cursorAwaitingUserTimers.clear();
+  clearAgentNotifyBubbles();
+}
+
+function clearStuckAgentNotifyState() {
+  for (const timer of cursorToolStuckTimers.values()) clearTimeout(timer);
+  cursorToolStuckTimers.clear();
+  for (const timer of cursorAwaitingUserTimers.values()) clearTimeout(timer);
+  cursorAwaitingUserTimers.clear();
+  clearAgentNotifyBubbles(null, "cursor-tool-stuck");
+  clearAgentNotifyBubbles(null, "cursor-awaiting-user");
+  clearAgentNotifyBubbles(null, "codex-stuck");
+  clearAgentNotifyBubbles(null, "codex-permission");
+}
+
+function showCursorToolStuck(sessionId, toolName) {
+  const session = sessions.get(sessionId);
+  if (!session || session.agentId !== "cursor-agent") return;
+  if (session.state !== "working" && session.state !== "thinking" && session.state !== "juggling") return;
+  const displayTool = toolName || (lang === "zh" ? "工具调用" : "tool call");
+  showAgentNotifyBubble({
+    sessionId,
+    agentId: "cursor-agent",
+    kind: "cursor-tool-stuck",
+    agentName: "Cursor",
+    toolName: "Cursor",
+    title: lang === "zh" ? "Cursor Agent 可能需要你查看一下" : "Cursor Agent may need attention",
+    message: lang === "zh"
+      ? `${displayTool} 已经持续超过 ${Math.round(CURSOR_TOOL_STUCK_MS / 1000)} 秒，可能在等待确认或运行较久。`
+      : `${displayTool} has been active for more than ${Math.round(CURSOR_TOOL_STUCK_MS / 1000)} seconds. It may be waiting or running longer than usual.`,
+    detail: shortSessionId(sessionId) ? (lang === "zh" ? `会话 ${shortSessionId(sessionId)}` : `Session ${shortSessionId(sessionId)}`) : "",
+  });
+}
+
+function scheduleCursorToolStuck(sessionId, toolName) {
+  clearCursorToolStuck(sessionId);
+  const timer = setTimeout(() => {
+    cursorToolStuckTimers.delete(sessionId);
+    showCursorToolStuck(sessionId, toolName);
+  }, CURSOR_TOOL_STUCK_MS);
+  cursorToolStuckTimers.set(sessionId, timer);
+}
+
+function showCursorAwaitingUser(sessionId, responsePreview) {
+  const session = sessions.get(sessionId);
+  if (!session || session.agentId !== "cursor-agent") return;
+  if (session.state !== "thinking" && session.state !== "attention" && session.state !== "notification") return;
+  showAgentNotifyBubble({
+    sessionId,
+    agentId: "cursor-agent",
+    kind: "cursor-awaiting-user",
+    agentName: "Cursor",
+    toolName: "Cursor",
+    title: lang === "zh" ? "Cursor Agent 可能正在等你确认" : "Cursor Agent may be waiting for you",
+    message: lang === "zh"
+      ? "它刚结束一轮回复，如果你在 Plan 模式或提问确认界面，可能需要点一下继续。"
+      : "It just finished a response. If Cursor is waiting for plan approval or input, it may need you to continue.",
+    detail: responsePreview || (shortSessionId(sessionId) ? `会话 ${shortSessionId(sessionId)}` : ""),
+  });
+}
+
+function scheduleCursorAwaitingUser(sessionId, responsePreview) {
+  clearCursorAwaitingUser(sessionId);
+  const timer = setTimeout(() => {
+    cursorAwaitingUserTimers.delete(sessionId);
+    showCursorAwaitingUser(sessionId, responsePreview);
+  }, CURSOR_AWAITING_USER_MS);
+  cursorAwaitingUserTimers.set(sessionId, timer);
+}
+
+function showCodexStuck(sessionId) {
+  const session = sessions.get(sessionId);
+  if (session && session.agentId !== "codex") return;
+  clearAgentNotifyBubbles(sessionId, "codex-permission");
+  showAgentNotifyBubble({
+    sessionId,
+    agentId: "codex",
+    kind: "codex-stuck",
+    agentName: "Codex",
+    toolName: "Codex",
+    title: lang === "zh" ? "Codex 可能卡住或等待输入" : "Codex may be waiting",
+    message: lang === "zh"
+      ? `Codex 超过 ${Math.round(CODEX_STUCK_MS / 1000)} 秒没有新的活动，可能需要你查看 Codex。`
+      : `Codex has had no new activity for more than ${Math.round(CODEX_STUCK_MS / 1000)} seconds. It may need attention in Codex.`,
+    detail: shortSessionId(sessionId) ? (lang === "zh" ? `会话 ${shortSessionId(sessionId)}` : `Session ${shortSessionId(sessionId)}`) : "",
+  });
+}
+
+function showAgentDone(sessionId, agentId) {
+  const isCursor = agentId === "cursor-agent";
+  const agentName = isCursor ? "Cursor" : "Codex";
+  const title = lang === "zh" ? `${agentName} 任务已完成` : `${agentName} task finished`;
+  const message = lang === "zh"
+    ? "任务已经结束，可以回来查看结果。"
+    : "The task has finished. You can check the result now.";
+  showAgentNotifyBubble({
+    sessionId,
+    agentId,
+    kind: "agent-done",
+    category: "done",
+    agentName,
+    toolName: agentName,
+    title,
+    message,
+    detail: shortSessionId(sessionId) ? (lang === "zh" ? `会话 ${shortSessionId(sessionId)}` : `Session ${shortSessionId(sessionId)}`) : "",
+  });
+}
+
+function noteAgentActivity({ sessionId, state, event, agentId, toolName, responsePreview }) {
+  if (!sessionId || !agentId) return;
+
+  if (agentId === "cursor-agent") {
+    if (event === "PreToolUse") {
+      clearCursorAwaitingUser(sessionId);
+      scheduleCursorToolStuck(sessionId, toolName);
+    } else if (event === "AfterAgentResponse") {
+      clearCursorToolStuck(sessionId);
+      scheduleCursorAwaitingUser(sessionId, responsePreview);
+    } else if (
+      event === "UserPromptSubmit" ||
+      event === "AfterAgentThought" ||
+      event === "PostToolUse" ||
+      event === "PostToolUseFailure" ||
+      event === "Stop" ||
+      event === "StopFailure" ||
+      event === "SessionEnd"
+    ) {
+      clearCursorToolStuck(sessionId);
+      clearCursorAwaitingUser(sessionId);
+    }
+    if (event === "Stop") showAgentDone(sessionId, agentId);
+    return;
+  }
+
+  if (agentId === "codex") {
+    if (state === "codex-stuck") {
+      showCodexStuck(sessionId);
+      return;
+    }
+    clearAgentNotifyBubbles(sessionId, "codex-stuck");
+    if (state !== "codex-permission") clearCodexNotifyBubbles(sessionId);
+    if (event === "event_msg:task_complete") showAgentDone(sessionId, agentId);
+  }
+}
+
 // ── Sound playback ──
 let lastSoundTime = 0;
 const SOUND_COOLDOWN_MS = 10000;
@@ -371,6 +553,48 @@ function playSound(name) {
 
 function resetSoundCooldown() {
   lastSoundTime = 0;
+}
+
+function activateMacApp(appName) {
+  if (!isMac || !appName) return;
+  const { execFile } = require("child_process");
+  const script = `tell application "${appName}" to activate`;
+  execFile("osascript", ["-e", script], { timeout: 1200 }, () => {});
+}
+
+function activateMacAppFromList(appNames, fallbackAppName) {
+  if (!isMac) return;
+  const { execFile } = require("child_process");
+  const candidates = Array.isArray(appNames) ? appNames.filter(Boolean) : [];
+  if (!candidates.length && !fallbackAppName) return;
+  const quoted = candidates.map(name => `"${name.replace(/"/g, '\\"')}"`).join(", ");
+  const fallback = fallbackAppName || candidates[0];
+  const script = `
+set candidateApps to {${quoted}}
+tell application "System Events" to set runningApps to name of every process
+repeat with appName in candidateApps
+  if runningApps contains (appName as text) then
+    tell application (appName as text) to activate
+    return
+  end if
+end repeat
+tell application "${fallback.replace(/"/g, '\\"')}" to activate
+`;
+  execFile("osascript", ["-e", script], { timeout: 1500 }, () => {});
+}
+
+function activateMacCodexApp() {
+  activateMacAppFromList(["Codex", "OpenAI Codex"], "Codex");
+}
+
+function activateMacTerminalApp() {
+  activateMacAppFromList(["Terminal", "iTerm2", "iTerm", "Warp", "Ghostty", "WezTerm", "kitty", "Alacritty", "Hyper"], "Terminal");
+}
+
+function shortSessionId(sessionId) {
+  if (!sessionId || typeof sessionId !== "string") return "";
+  const raw = sessionId.startsWith("codex:") ? sessionId.slice("codex:".length) : sessionId;
+  return raw.length > 8 ? raw.slice(-8) : raw;
 }
 
 // Sync input window position to match render window's hitbox.
@@ -415,6 +639,8 @@ const _permCtx = {
   get permDebugLog() { return permDebugLog; },
   get doNotDisturb() { return doNotDisturb; },
   get hideBubbles() { return hideBubbles; },
+  get aiStuckBubbles() { return aiStuckBubbles; },
+  get aiDoneBubbles() { return aiDoneBubbles; },
   get petHidden() { return petHidden; },
   getNearestWorkArea,
   getHitRectScreen,
@@ -424,11 +650,26 @@ const _permCtx = {
     _isAgentPermissionsEnabled({ agents: _settingsController.get("agents") }, agentId),
   focusTerminalForSession: (sessionId) => {
     const s = sessions.get(sessionId);
-    if (s && s.sourcePid) focusTerminalWindow(s.sourcePid, s.cwd, s.editor, s.pidChain);
+    if (!s) return;
+    const chainPid = Array.isArray(s.pidChain) && s.pidChain.length ? s.pidChain[0] : null;
+    const targetPid = s.sourcePid || s.agentPid || chainPid;
+    if (targetPid) {
+      focusTerminalWindow(targetPid, s.cwd, s.editor, s.pidChain);
+      return;
+    }
+    if (s.editor === "cursor" || s.agentId === "cursor-agent") {
+      activateMacApp("Cursor");
+      return;
+    }
+    if (s.agentId === "codex") {
+      activateMacCodexApp();
+      return;
+    }
+    activateMacTerminalApp();
   },
 };
 const _perm = require("./permission")(_permCtx);
-const { showPermissionBubble, resolvePermissionEntry, sendPermissionResponse, repositionBubbles, permLog, PASSTHROUGH_TOOLS, showCodexNotifyBubble, clearCodexNotifyBubbles, syncPermissionShortcuts, replyOpencodePermission } = _perm;
+const { showPermissionBubble, resolvePermissionEntry, sendPermissionResponse, repositionBubbles, permLog, PASSTHROUGH_TOOLS, showCodexNotifyBubble, clearCodexNotifyBubbles, showAgentNotifyBubble, clearAgentNotifyBubbles, syncPermissionShortcuts, replyOpencodePermission } = _perm;
 const pendingPermissions = _perm.pendingPermissions;
 let permDebugLog = null; // set after app.whenReady()
 let updateDebugLog = null; // set after app.whenReady()
@@ -614,6 +855,7 @@ const _serverCtx = {
   showPermissionBubble,
   replyOpencodePermission,
   permLog,
+  noteAgentActivity,
 };
 const _server = require("./server")(_serverCtx);
 const { startHttpServer, getHookServerPort } = _server;
@@ -721,6 +963,12 @@ const _menuCtx = {
   set bubbleFollowPet(v) { _settingsController.applyUpdate("bubbleFollowPet", v); },
   get hideBubbles() { return hideBubbles; },
   set hideBubbles(v) { _settingsController.applyUpdate("hideBubbles", v); },
+  get aiStuckBubbles() { return aiStuckBubbles; },
+  set aiStuckBubbles(v) { _settingsController.applyUpdate("aiStuckBubbles", v); },
+  get aiDoneBubbles() { return aiDoneBubbles; },
+  set aiDoneBubbles(v) { _settingsController.applyUpdate("aiDoneBubbles", v); },
+  get petOpacity() { return petOpacity; },
+  set petOpacity(v) { _settingsController.applyUpdate("petOpacity", normalizePetOpacity(v)); },
   get showSessionId() { return showSessionId; },
   set showSessionId(v) { _settingsController.applyUpdate("showSessionId", v); },
   get soundMuted() { return soundMuted; },
@@ -783,8 +1031,8 @@ const { t, buildContextMenu, buildTrayMenu, rebuildAllMenus, createTray,
 // route writes through the controller, so menu clicks and IPC updates
 // from a future settings panel land here identically.
 const MENU_AFFECTING_KEYS = new Set([
-  "lang", "soundMuted", "bubbleFollowPet", "hideBubbles", "showSessionId",
-  "autoStartWithClaude", "openAtLogin", "showTray", "showDock", "theme", "size",
+  "lang", "soundMuted", "bubbleFollowPet", "hideBubbles", "aiStuckBubbles", "aiDoneBubbles",
+  "petOpacity", "showSessionId", "autoStartWithClaude", "openAtLogin", "showTray", "showDock", "theme", "size",
 ]);
 function wireSettingsSubscribers() {
   _settingsController.subscribe(({ changes }) => {
@@ -816,15 +1064,21 @@ function wireSettingsSubscribers() {
     }
     if ("bubbleFollowPet" in changes) bubbleFollowPet = changes.bubbleFollowPet;
     if ("hideBubbles" in changes) hideBubbles = changes.hideBubbles;
+    if ("aiStuckBubbles" in changes) aiStuckBubbles = changes.aiStuckBubbles;
+    if ("aiDoneBubbles" in changes) aiDoneBubbles = changes.aiDoneBubbles;
+    if ("petOpacity" in changes) { petOpacity = changes.petOpacity; applyPetOpacity(); }
     if ("showSessionId" in changes) showSessionId = changes.showSessionId;
     if ("soundMuted" in changes) soundMuted = changes.soundMuted;
 
     // 2. Reactive side effects (mirror what the legacy setters / click handlers used to do).
     if ("hideBubbles" in changes) {
+      if (changes.hideBubbles) clearAllAgentNotifyState();
       try { syncPermissionShortcuts(); } catch (err) {
         console.warn("Clawd: syncPermissionShortcuts failed:", err && err.message);
       }
     }
+    if ("aiStuckBubbles" in changes && !changes.aiStuckBubbles) clearStuckAgentNotifyState();
+    if ("aiDoneBubbles" in changes && !changes.aiDoneBubbles) clearAgentNotifyBubbles(null, "agent-done");
     if ("bubbleFollowPet" in changes) {
       try { repositionFloatingBubbles(); } catch (err) {
         console.warn("Clawd: repositionFloatingBubbles failed:", err && err.message);
@@ -1083,6 +1337,7 @@ function createWindow() {
     }, 0);
   }
 
+  applyPetOpacity();
   buildContextMenu();
   if (!isMac || showTray) createTray();
   ensureContextMenuOwner();
@@ -1511,15 +1766,20 @@ if (!gotTheLock) {
       const CodexLogMonitor = require("../agents/codex-log-monitor");
       const codexAgent = require("../agents/codex");
       _codexMonitor = new CodexLogMonitor(codexAgent, (sid, state, event, extra) => {
+        if (state === "codex-stuck") {
+          noteAgentActivity({ sessionId: sid, state, event, agentId: "codex" });
+          return;
+        }
         if (state === "codex-permission") {
           updateSession(sid, "notification", event, null, extra.cwd, null, null, null, "codex");
+          noteAgentActivity({ sessionId: sid, state, event, agentId: "codex" });
           showCodexNotifyBubble({
             sessionId: sid,
             command: extra.permissionDetail?.command || "",
           });
           return;
         }
-        clearCodexNotifyBubbles(sid);
+        noteAgentActivity({ sessionId: sid, state, event, agentId: "codex" });
         updateSession(sid, state, event, null, extra.cwd, null, null, null, "codex");
       });
       if (_isAgentEnabled(_settingsController.getSnapshot(), "codex")) {
@@ -1556,6 +1816,7 @@ if (!gotTheLock) {
     flushRuntimeStateToPrefs();
     unregisterToggleShortcut();
     globalShortcut.unregisterAll();
+    clearAllAgentNotifyState();
     _perm.cleanup();
     _server.cleanup();
     _updateBubble.cleanup();

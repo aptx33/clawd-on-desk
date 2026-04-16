@@ -212,6 +212,8 @@ function startHttpServer() {
           const agentId = typeof data.agent_id === "string" ? data.agent_id : "claude-code";
           const host = typeof data.host === "string" ? data.host : null;
           const headless = data.headless === true;
+          const toolName = typeof data.tool_name === "string" ? data.tool_name : "";
+          const responsePreview = typeof data.response_preview === "string" ? data.response_preview : "";
           // Agent gate: user disabled this agent in the settings panel. Drop
           // with 204 so hook scripts get a quick no-op response instead of
           // hanging on our HTTP connection. Still surfaces as a success code
@@ -240,6 +242,9 @@ function startHttpServer() {
               ctx.setState(state, safeSvg);
             } else {
               ctx.updateSession(sid, state, event, source_pid, cwd, editor, pidChain, agentPid, agentId, host, headless, display_svg);
+              if (ctx.noteAgentActivity) {
+                ctx.noteAgentActivity({ sessionId: sid, state, event, agentId, toolName, responsePreview });
+              }
             }
             res.writeHead(200, { [CLAWD_SERVER_HEADER]: CLAWD_SERVER_ID });
             res.end("ok");

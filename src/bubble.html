@@ -8,22 +8,23 @@
 
 /* ── Theme variables ── */
 :root {
-  --ease-spring: var(--ease-spring);
+  --ease-spring: cubic-bezier(0.2, 0.9, 0.22, 1);
+  --ease-pop: cubic-bezier(0.18, 1.35, 0.24, 1);
   --card-bg: #ffffff;
-  --card-border: rgba(0, 0, 0, 0.08);
-  --card-shadow: 0 4px 16px rgba(0, 0, 0, 0.12), 0 1px 3px rgba(0, 0, 0, 0.08);
+  --card-border: rgba(24, 24, 27, 0.08);
+  --card-shadow: 0 10px 26px rgba(24, 24, 27, 0.13), 0 2px 7px rgba(24, 24, 27, 0.08);
   --card-inset: none;
   --text-primary: #18181b;
   --header-color: #374151;
-  --cmd-bg: #f4f4f5;
-  --cmd-border: rgba(0, 0, 0, 0.06);
+  --cmd-bg: #fff7ed;
+  --cmd-border: rgba(251, 146, 60, 0.16);
   --cmd-color: #374151;
   --cmd-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.06);
   --scroll-thumb: rgba(0, 0, 0, 0.15);
   --scroll-thumb-hover: rgba(0, 0, 0, 0.25);
   --deny-bg: #ffffff;
   --deny-color: #52525b;
-  --deny-border: #d1d5db;
+  --deny-border: #e4e4e7;
   --deny-hover-bg: #f9fafb;
   --deny-hover-border: #9ca3af;
   --sug-bg: #ffffff;
@@ -38,13 +39,13 @@
   :root {
     --card-bg: #18181b;
     --card-border: rgba(255, 255, 255, 0.1);
-    --card-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+    --card-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
     --card-inset: inset 0 1px 0 rgba(255, 255, 255, 0.05);
     --text-primary: #f4f4f5;
     --header-color: #e4e4e7;
-    --cmd-bg: #09090b;
-    --cmd-border: rgba(255, 255, 255, 0.06);
-    --cmd-color: #a1a1aa;
+    --cmd-bg: #27211d;
+    --cmd-border: rgba(251, 146, 60, 0.14);
+    --cmd-color: #e4e4e7;
     --cmd-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.2);
     --scroll-thumb: rgba(255, 255, 255, 0.1);
     --scroll-thumb-hover: rgba(255, 255, 255, 0.2);
@@ -72,32 +73,80 @@ html, body {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   -webkit-font-smoothing: antialiased;
 }
-body { padding: 6px; }
+body { padding: 5px; }
 
 .card {
   position: relative;
   background: var(--card-bg);
   border: 1px solid var(--card-border);
-  border-radius: 16px;
-  padding: 16px 20px;
+  border-radius: 8px;
+  padding: 10px 11px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 7px;
   box-shadow: var(--card-shadow), var(--card-inset, none);
   color: var(--text-primary);
   opacity: 0;
-  transform: translateX(60px);
-  transition: opacity 0.35s var(--ease-spring), transform 0.4s var(--ease-spring);
+  transform-origin: calc(100% - 18px) calc(100% - 14px);
+  transform: translateX(20px) translateY(7px) scale(0.86) rotate(1.5deg);
+  transition: opacity 0.18s ease, transform 0.22s var(--ease-spring);
   overflow: hidden;
+}
+.card::after {
+  content: "";
+  position: absolute;
+  top: 8px;
+  right: 12px;
+  width: 22px;
+  height: 14px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.4);
+  transform: translateX(34px) rotate(-16deg);
+  pointer-events: none;
 }
 
 .card.visible {
   opacity: 1;
-  transform: translateX(0);
+  transform: translateX(0) scale(1);
+  animation: bubble-pop 0.38s var(--ease-pop) both, bubble-settle 0.34s ease-out 0.38s both;
 }
 .card.hiding {
   opacity: 0;
-  transform: translateX(60px);
+  transform: translateX(18px) translateY(5px) scale(0.94);
+  animation: none;
+}
+.card.visible::after {
+  animation: bubble-shine 0.62s ease-out 0.08s both;
+}
+.card.visible .header {
+  animation: bubble-float-in 0.28s var(--ease-pop) 0.06s both;
+}
+.card.visible .command-block {
+  animation: bubble-float-in 0.3s var(--ease-pop) 0.1s both;
+}
+.card.visible .actions,
+.card.visible .suggestions {
+  animation: bubble-float-in 0.32s var(--ease-pop) 0.14s both;
+}
+
+@keyframes bubble-pop {
+  0% { opacity: 0; transform: translateX(22px) translateY(8px) scale(0.84) rotate(2deg); }
+  58% { opacity: 1; transform: translateX(-3px) translateY(-2px) scale(1.035) rotate(-0.7deg); }
+  78% { opacity: 1; transform: translateX(1px) translateY(1px) scale(0.985) rotate(0.25deg); }
+  100% { opacity: 1; transform: translateX(0) translateY(0) scale(1) rotate(0); }
+}
+@keyframes bubble-settle {
+  0%, 100% { filter: none; }
+  38% { filter: saturate(1.06); }
+}
+@keyframes bubble-float-in {
+  0% { opacity: 0; transform: translateY(5px) scale(0.98); }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes bubble-shine {
+  0% { opacity: 0; transform: translateX(36px) rotate(-16deg); }
+  36% { opacity: 0.75; }
+  100% { opacity: 0; transform: translateX(-260px) rotate(-16deg); }
 }
 
 /* ── Header ── */
@@ -108,34 +157,37 @@ body { padding: 6px; }
   margin-bottom: 0;
 }
 .header-title {
-  font-size: 13px;
+  font-size: 11px;
   font-weight: 600;
   color: var(--header-color);
-  letter-spacing: 0.02em;
+  letter-spacing: 0;
 }
 
 /* ── Tool pill ── */
 .tool-pill {
   display: inline-flex;
   align-items: center;
-  padding: 3px 8px;
-  border-radius: 6px;
-  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 8px;
+  font-size: 10px;
   font-weight: 700;
   text-transform: uppercase;
   color: #fff;
-  letter-spacing: 0.05em;
+  letter-spacing: 0;
   background: #52525b;
+  box-shadow: 0 1px 4px rgba(24, 24, 27, 0.12);
 }
-.tool-pill[data-tool="Bash"]  { background: #d97757; }
-.tool-pill[data-tool="Edit"]  { background: #5b8dd9; }
-.tool-pill[data-tool="Write"] { background: #8b7ec7; }
-.tool-pill[data-tool="Read"]  { background: #5a9e6f; }
-.tool-pill[data-tool="Glob"]  { background: #5a9eab; }
-.tool-pill[data-tool="Grep"]  { background: #5a9eab; }
-.tool-pill[data-tool="Agent"] { background: #c47a9a; }
-.tool-pill[data-tool="Shell"] { background: #d97757; }
-.tool-pill[data-tool="CodexExec"] { background: #2563eb; }
+.tool-pill[data-tool="Bash"]  { background: #e36b51; }
+.tool-pill[data-tool="Edit"]  { background: #3f83c6; }
+.tool-pill[data-tool="Write"] { background: #8c6fb8; }
+.tool-pill[data-tool="Read"]  { background: #469c72; }
+.tool-pill[data-tool="Glob"]  { background: #3f9ca8; }
+.tool-pill[data-tool="Grep"]  { background: #3f9ca8; }
+.tool-pill[data-tool="Agent"] { background: #ce6f9a; }
+.tool-pill[data-tool="Shell"] { background: #e36b51; }
+.tool-pill[data-tool="Cursor"] { background: #ce6f9a; }
+.tool-pill[data-tool="Codex"] { background: #3f83c6; }
+.tool-pill[data-tool="CodexExec"] { background: #3f83c6; }
 
 /* ── Session tag (folder + short id, hidden when absent) ── */
 .session-tag {
@@ -154,15 +206,15 @@ body { padding: 6px; }
 
 /* ── Command block ── */
 .command-block {
-  padding: 12px;
+  padding: 8px 9px;
   background: var(--cmd-bg);
   border: 1px solid var(--cmd-border);
-  border-radius: 10px;
+  border-radius: 8px;
   font-family: "SF Mono", "ui-monospace", "Cascadia Code", "Fira Code", monospace;
-  font-size: 12px;
+  font-size: 11px;
   color: var(--cmd-color);
   line-height: 1.5;
-  max-height: 80px;
+  max-height: 54px;
   overflow-y: auto;
   word-break: break-all;
   box-shadow: var(--cmd-shadow);
@@ -175,30 +227,34 @@ body { padding: 6px; }
 /* ── Action buttons ── */
 .actions {
   display: flex;
-  gap: 8px;
+  gap: 7px;
 }
 .btn {
   flex: 1;
-  padding: 7px 0;
+  min-height: 27px;
+  padding: 5px 0;
   border-radius: 8px;
   font-family: inherit;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 600;
   cursor: pointer;
   border: 1px solid transparent;
   transition: all 0.2s var(--ease-spring);
   outline: none;
 }
+.btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
 .btn:active:not(:disabled) { transform: scale(0.96); }
 .btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .btn-allow {
-  background: #d97757;
+  background: #e36b51;
   color: #fff;
   border: 1px solid transparent;
 }
 .btn-allow:hover:not(:disabled) {
-  background: #c4684a;
+  background: #d45f47;
 }
 
 .btn-deny {
@@ -215,19 +271,19 @@ body { padding: 6px; }
 .suggestions {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 5px;
 }
 
 .btn-suggestion {
   display: block;
   width: 100%;
-  padding: 7px 12px;
+  padding: 6px 10px;
   background: var(--sug-bg);
   color: var(--sug-color);
   border: 1px solid var(--sug-border);
   border-radius: 8px;
   font-family: inherit;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 500;
   cursor: pointer;
   transition: all 0.2s var(--ease-spring);
@@ -260,6 +316,24 @@ body { padding: 6px; }
 
 .btn-suggestion:active:not(:disabled) { transform: scale(0.98); }
 .btn-suggestion:disabled { opacity: 0.4; cursor: not-allowed; }
+
+@media (prefers-reduced-motion: reduce) {
+  .card,
+  .card.visible,
+  .card.hiding,
+  .card.visible .header,
+  .card.visible .command-block,
+  .card.visible .actions,
+  .card.visible .suggestions,
+  .card.visible::after {
+    animation: none;
+    transition: opacity 0.12s ease, transform 0.12s ease;
+  }
+  .card.visible {
+    opacity: 1;
+    transform: none;
+  }
+}
 </style>
 </head>
 <body>
@@ -291,6 +365,8 @@ const suggestionsContainer = document.getElementById("suggestions");
 const headerTitle = document.querySelector(".header-title");
 const sessionTag = document.getElementById("sessionTag");
 let elicitationMode = false;
+let allowBehavior = "allow";
+let denyBehavior = "deny";
 
 function setSessionTag(data) {
   const parts = [];
@@ -364,6 +440,32 @@ function revealCard() {
 function show(data) {
   elicitationMode = data.isElicitation || false;
   setSessionTag(data);
+  allowBehavior = "allow";
+  denyBehavior = "deny";
+  btnAllow.style.display = "";
+  btnDeny.style.display = "";
+  suggestionsContainer.innerHTML = "";
+
+  if (data.isAgentNotify) {
+    headerTitle.textContent = data.notifyTitle || (data.lang === "zh" ? "AI 可能需要你查看一下" : "AI may need attention");
+    toolPill.textContent = data.agentName || data.toolName || "Agent";
+    toolPill.setAttribute("data-tool", data.toolName || data.agentName || "Agent");
+    toolPill.style.display = "";
+
+    const lines = [];
+    if (data.notifyMessage) lines.push(data.notifyMessage);
+    if (data.notifyDetail) lines.push(data.notifyDetail);
+    commandBlock.textContent = lines.join("\n") || (data.lang === "zh" ? "可能在等待输入或确认。" : "It may be waiting for input or confirmation.");
+
+    btnAllow.textContent = data.lang === "zh" ? "去查看" : "Go to Check";
+    btnDeny.textContent = data.lang === "zh" ? "关闭" : "Dismiss";
+    btnAllow.disabled = false;
+    btnDeny.disabled = false;
+    allowBehavior = "agent-focus";
+    denyBehavior = "agent-dismiss";
+    revealCard();
+    return;
+  }
 
   // opencode branch — Phase 2. Three differences from CC:
   //   1. tool names are lowercase (edit/bash/write) — we PascalCase them so
@@ -450,6 +552,7 @@ function show(data) {
     btnAllow.disabled = false;
     btnDeny.style.display = "none";
     suggestionsContainer.innerHTML = "";
+    allowBehavior = "deny";
     revealCard();
     return;
   }
@@ -533,14 +636,13 @@ function hide() {
 btnAllow.addEventListener("click", () => {
   btnAllow.textContent = "...";
   disableAll();
-  // Elicitation: "deny" tells Claude Code to fall back to terminal
-  window.bubbleAPI.decide(elicitationMode ? "deny" : "allow");
+  window.bubbleAPI.decide(allowBehavior);
 });
 
 btnDeny.addEventListener("click", () => {
   btnDeny.textContent = "...";
   disableAll();
-  window.bubbleAPI.decide("deny");
+  window.bubbleAPI.decide(denyBehavior);
 });
 
 window.bubbleAPI.onPermissionShow(show);

@@ -60,6 +60,13 @@ const SCHEMA = {
   openAtLoginHydrated: { type: "boolean", default: false },
   bubbleFollowPet: { type: "boolean", default: false },
   hideBubbles: { type: "boolean", default: false },
+  aiStuckBubbles: { type: "boolean", default: true },
+  aiDoneBubbles: { type: "boolean", default: true },
+  petOpacity: {
+    type: "number",
+    default: 1,
+    validate: (v) => Number.isFinite(v) && v >= 0.4 && v <= 1,
+  },
   showSessionId: { type: "boolean", default: false },
   soundMuted: { type: "boolean", default: false },
   // Theme

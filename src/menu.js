@@ -58,6 +58,22 @@ module.exports = function initMenu(ctx) {
     return items;
   }
 
+  function buildOpacitySubmenu() {
+    const presets = [
+      { value: 1, label: t("opacity100") },
+      { value: 0.85, label: t("opacity85") },
+      { value: 0.7, label: t("opacity70") },
+      { value: 0.55, label: t("opacity55") },
+      { value: 0.4, label: t("opacity40") },
+    ];
+    return presets.map((preset) => ({
+      label: preset.label,
+      type: "radio",
+      checked: Math.abs((ctx.petOpacity || 1) - preset.value) < 0.001,
+      click: () => { ctx.petOpacity = preset.value; },
+    }));
+  }
+
   // ── System tray ──
   function createTray() {
     if (ctx.tray) return;
@@ -114,6 +130,18 @@ module.exports = function initMenu(ctx) {
         click: (menuItem) => { ctx.hideBubbles = menuItem.checked; },
       },
       {
+        label: t("aiStuckBubbles"),
+        type: "checkbox",
+        checked: ctx.aiStuckBubbles,
+        click: (menuItem) => { ctx.aiStuckBubbles = menuItem.checked; },
+      },
+      {
+        label: t("aiDoneBubbles"),
+        type: "checkbox",
+        checked: ctx.aiDoneBubbles,
+        click: (menuItem) => { ctx.aiDoneBubbles = menuItem.checked; },
+      },
+      {
         label: t("soundEffects"),
         type: "checkbox",
         checked: !ctx.soundMuted,
@@ -129,6 +157,10 @@ module.exports = function initMenu(ctx) {
       {
         label: t("theme"),
         submenu: buildThemeSubmenu(),
+      },
+      {
+        label: t("opacity"),
+        submenu: buildOpacitySubmenu(),
       },
       { type: "separator" },
       {
@@ -429,6 +461,41 @@ module.exports = function initMenu(ctx) {
         label: t("theme"),
         submenu: buildThemeSubmenu(),
       },
+      {
+        label: t("opacity"),
+        submenu: buildOpacitySubmenu(),
+      },
+      { type: "separator" },
+      {
+        label: t("bubbleFollow"),
+        type: "checkbox",
+        checked: ctx.bubbleFollowPet,
+        click: (menuItem) => { ctx.bubbleFollowPet = menuItem.checked; },
+      },
+      {
+        label: t("hideBubbles"),
+        type: "checkbox",
+        checked: ctx.hideBubbles,
+        click: (menuItem) => { ctx.hideBubbles = menuItem.checked; },
+      },
+      {
+        label: t("aiStuckBubbles"),
+        type: "checkbox",
+        checked: ctx.aiStuckBubbles,
+        click: (menuItem) => { ctx.aiStuckBubbles = menuItem.checked; },
+      },
+      {
+        label: t("aiDoneBubbles"),
+        type: "checkbox",
+        checked: ctx.aiDoneBubbles,
+        click: (menuItem) => { ctx.aiDoneBubbles = menuItem.checked; },
+      },
+      {
+        label: t("soundEffects"),
+        type: "checkbox",
+        checked: !ctx.soundMuted,
+        click: (menuItem) => { ctx.soundMuted = !menuItem.checked; },
+      },
     ];
     // macOS: Dock and Menu Bar visibility toggles
     if (isMac) {
@@ -506,4 +573,3 @@ module.exports = function initMenu(ctx) {
     requestAppQuit,
   };
 };
-

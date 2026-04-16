@@ -131,6 +131,17 @@ const updateRegistry = {
   soundMuted: requireBoolean("soundMuted"),
   bubbleFollowPet: requireBoolean("bubbleFollowPet"),
   hideBubbles: requireBoolean("hideBubbles"),
+  aiStuckBubbles: requireBoolean("aiStuckBubbles"),
+  aiDoneBubbles: requireBoolean("aiDoneBubbles"),
+  petOpacity(value) {
+    if (typeof value !== "number" || !Number.isFinite(value)) {
+      return { status: "error", message: "petOpacity must be a finite number" };
+    }
+    if (value < 0.4 || value > 1) {
+      return { status: "error", message: "petOpacity must be between 0.4 and 1" };
+    }
+    return { status: "ok" };
+  },
   showSessionId: requireBoolean("showSessionId"),
 
   // ── System-backed prefs (object-form: validate + effect pre-commit gate) ──

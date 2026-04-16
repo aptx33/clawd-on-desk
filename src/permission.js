@@ -175,7 +175,7 @@ let hotkeysRegistered = false;
 
 function getActionablePermissions() {
   return pendingPermissions.filter(
-    p => !p.isElicitation && !p.isCodexNotify && p.toolName !== "ExitPlanMode"
+    p => !p.isElicitation && !p.isCodexNotify && !p.isAgentNotify && p.toolName !== "ExitPlanMode"
   );
 }
 
@@ -217,7 +217,7 @@ function hotkeyDeny()  { hotkeyResolve("deny", "Denied via hotkey"); }
 
 // Fallback height before renderer reports actual measurement
 function estimateBubbleHeight(sugCount) {
-  return 200 + (sugCount || 0) * 37;
+  return 150 + (sugCount || 0) * 32;
 }
 
 function repositionBubbles() {
@@ -226,7 +226,7 @@ function repositionBubbles() {
   if (!ctx.win || ctx.win.isDestroyed()) return;
   const margin = 8;
   const gap = 6;
-  const bw = 340;
+  const bw = 260;
   const petBounds = ctx.win.getBounds();
   const cx = petBounds.x + petBounds.width / 2;
   const cy = petBounds.y + petBounds.height / 2;
@@ -259,7 +259,7 @@ function showPermissionBubble(permEntry) {
   const sugCount = (permEntry.suggestions || []).length;
   const bh = estimateBubbleHeight(sugCount);
   // Temporary position — repositionBubbles() will finalize after renderer reports real height
-  const pos = { x: 0, y: 0, width: 340, height: bh };
+  const pos = { x: 0, y: 0, width: 260, height: bh };
 
   const bub = new BrowserWindow({
     width: pos.width,
@@ -311,6 +311,11 @@ function showPermissionBubble(permEntry) {
       opencodePatterns: permEntry.opencodePatterns || [],
       sessionFolder,
       sessionShortId,
+      isAgentNotify: permEntry.isAgentNotify || false,
+      agentName: permEntry.agentName || "",
+      notifyTitle: permEntry.notifyTitle || "",
+      notifyMessage: permEntry.notifyMessage || "",
+      notifyDetail: permEntry.notifyDetail || "",
     });
     // Don't call bub.focus() — it steals focus from terminal and can trigger
     // false "User answered in terminal" denials in Claude Code, wasting tokens.
@@ -338,6 +343,11 @@ function resolvePermissionEntry(permEntry, behavior, message) {
   // Codex notify bubbles have no HTTP connection — route to dedicated cleanup
   if (permEntry.isCodexNotify) {
     dismissCodexNotify(permEntry);
+    return;
+  }
+  if (permEntry.isAgentNotify) {
+    if (behavior === "agent-focus") ctx.focusTerminalForSession(permEntry.sessionId);
+    dismissAgentNotify(permEntry);
     return;
   }
   const idx = pendingPermissions.indexOf(permEntry);
@@ -517,6 +527,10 @@ function handleDecide(event, behavior) {
     dismissCodexNotify(perm);
     return;
   }
+  if (perm.isAgentNotify) {
+    resolvePermissionEntry(perm, behavior === "agent-focus" ? "agent-focus" : "agent-dismiss");
+    return;
+  }
   // opencode "Always" button — map to reply="always" via resolvePermissionEntry
   if (behavior === "opencode-always") {
     perm.opencodeAlwaysPicked = true;
@@ -565,29 +579,89 @@ function handleDecide(event, behavior) {
   }
 }
 
-const CODEX_NOTIFY_EXPIRE_MS = 30000;
+const AGENT_NOTIFY_EXPIRE_MS = 60000;
 
 function showCodexNotifyBubble({ sessionId, command }) {
+  showAgentNotifyBubble({
+    sessionId,
+    agentId: "codex",
+    kind: "codex-permission",
+    agentName: "Codex",
+    toolName: "Codex",
+    title: ctx.lang === "zh" ? "Codex 可能正在等待确认" : "Codex may be waiting",
+    message: ctx.lang === "zh"
+      ? "Codex 可能正在等待你确认命令。"
+      : "Codex may be waiting for command approval.",
+    detail: command || "",
+  });
+}
+
+function showAgentNotifyBubble({ sessionId, agentId, kind, category, agentName, toolName, title, message, detail }) {
   if (shouldSuppressCodexNotifyBubble(ctx)) {
-    permLog(`codex notify suppressed: session=${sessionId} dnd=${ctx.doNotDisturb} hideBubbles=${ctx.hideBubbles}`);
+    permLog(`agent notify suppressed: agent=${agentId || "?"} kind=${kind || "?"} session=${sessionId} dnd=${ctx.doNotDisturb} hideBubbles=${ctx.hideBubbles}`);
     return;
   }
+  const notifyCategory = category || "stuck";
+  if (notifyCategory === "done" && ctx.aiDoneBubbles === false) {
+    permLog(`agent done notify disabled: agent=${agentId || "?"} session=${sessionId}`);
+    return;
+  }
+  if (notifyCategory !== "done" && ctx.aiStuckBubbles === false) {
+    permLog(`agent stuck notify disabled: agent=${agentId || "?"} kind=${kind || "?"} session=${sessionId}`);
+    return;
+  }
+
+  const existing = pendingPermissions.find(
+    p => p.isAgentNotify && p.sessionId === sessionId && p.agentNotifyKind === kind
+  );
+  if (existing) {
+    existing.createdAt = Date.now();
+    existing.agentName = agentName || existing.agentName;
+    existing.agentNotifyCategory = notifyCategory;
+    existing.toolName = toolName || existing.toolName;
+    existing.notifyTitle = title || existing.notifyTitle;
+    existing.notifyMessage = message || existing.notifyMessage;
+    existing.notifyDetail = detail || existing.notifyDetail;
+    if (existing.autoExpireTimer) clearTimeout(existing.autoExpireTimer);
+    if (existing.bubble && !existing.bubble.isDestroyed()) {
+      existing.bubble.webContents.send("permission-show", {
+        toolName: existing.toolName,
+        toolInput: existing.toolInput,
+        suggestions: [],
+        lang: ctx.lang,
+        isAgentNotify: true,
+        agentName: existing.agentName,
+        notifyTitle: existing.notifyTitle,
+        notifyMessage: existing.notifyMessage,
+        notifyDetail: existing.notifyDetail,
+      });
+    }
+    existing.autoExpireTimer = setTimeout(() => dismissAgentNotify(existing), AGENT_NOTIFY_EXPIRE_MS);
+    return;
+  }
+
   const permEntry = {
     res: null,
     abortHandler: null, suggestions: [],
     sessionId, bubble: null, hideTimer: null,
-    toolName: "CodexExec",
-    toolInput: { command: command || "(unknown)" },
+    toolName: toolName || agentName || "Agent",
+    toolInput: {},
     resolvedSuggestion: null, createdAt: Date.now(),
-    isElicitation: false, isCodexNotify: true,
-    agentId: "codex",
+    isElicitation: false, isAgentNotify: true,
+    agentId: agentId || "",
+    agentNotifyKind: kind || "agent-notify",
+    agentNotifyCategory: notifyCategory,
+    agentName: agentName || "Agent",
+    notifyTitle: title || (ctx.lang === "zh" ? "AI 可能需要你查看一下" : "AI may need attention"),
+    notifyMessage: message || "",
+    notifyDetail: detail || "",
     autoExpireTimer: null,
   };
   pendingPermissions.push(permEntry);
   showPermissionBubble(permEntry);
   permEntry.autoExpireTimer = setTimeout(() => {
-    dismissCodexNotify(permEntry);
-  }, CODEX_NOTIFY_EXPIRE_MS);
+    dismissAgentNotify(permEntry);
+  }, AGENT_NOTIFY_EXPIRE_MS);
 }
 
 function dismissCodexNotify(permEntry) {
@@ -603,6 +677,31 @@ function dismissCodexNotify(permEntry) {
   }
   repositionBubbles();
   syncPermissionShortcuts();
+}
+
+function dismissAgentNotify(permEntry) {
+  const idx = pendingPermissions.indexOf(permEntry);
+  if (idx === -1) return;
+  pendingPermissions.splice(idx, 1);
+  if (permEntry.autoExpireTimer) clearTimeout(permEntry.autoExpireTimer);
+  if (permEntry.hideTimer) clearTimeout(permEntry.hideTimer);
+  if (permEntry.bubble && !permEntry.bubble.isDestroyed()) {
+    permEntry.bubble.webContents.send("permission-hide");
+    const bub = permEntry.bubble;
+    setTimeout(() => { if (!bub.isDestroyed()) bub.destroy(); }, 250);
+  }
+  repositionBubbles();
+  syncPermissionShortcuts();
+}
+
+function clearAgentNotifyBubbles(sessionId, kind) {
+  const toRemove = pendingPermissions.filter(p => {
+    if (!p.isAgentNotify) return false;
+    if (sessionId && p.sessionId !== sessionId) return false;
+    if (kind && p.agentNotifyKind !== kind) return false;
+    return true;
+  });
+  for (const perm of toRemove) dismissAgentNotify(perm);
 }
 
 // Mirrors the DND dispatcher: CC res.destroy() so it falls back to chat,
@@ -650,6 +749,7 @@ function clearCodexNotifyBubbles(sessionId) {
     p => p.isCodexNotify && p.sessionId === sessionId
   );
   for (const perm of toRemove) dismissCodexNotify(perm);
+  clearAgentNotifyBubbles(sessionId, "codex-permission");
 }
 
 function cleanup() {
@@ -672,6 +772,7 @@ return {
   pendingPermissions, PASSTHROUGH_TOOLS,
   handleBubbleHeight, handleDecide, cleanup,
   showCodexNotifyBubble, clearCodexNotifyBubbles,
+  showAgentNotifyBubble, clearAgentNotifyBubbles,
   dismissPermissionsByAgent,
   syncPermissionShortcuts,
   replyOpencodePermission,
