@@ -153,6 +153,12 @@ module.exports = function initMenu(ctx) {
         checked: ctx.showSessionId,
         click: (menuItem) => { ctx.showSessionId = menuItem.checked; },
       },
+      {
+        label: t("autoHideOnSleep"),
+        type: "checkbox",
+        checked: ctx.autoHideOnSleep,
+        click: (menuItem) => { ctx.autoHideOnSleep = menuItem.checked; },
+      },
       { type: "separator" },
       {
         label: t("theme"),
@@ -495,6 +501,12 @@ module.exports = function initMenu(ctx) {
         type: "checkbox",
         checked: !ctx.soundMuted,
         click: (menuItem) => { ctx.soundMuted = !menuItem.checked; },
+      },
+      {
+        label: t("autoHideOnSleep"),
+        type: "checkbox",
+        checked: ctx.autoHideOnSleep,
+        click: (menuItem) => { ctx.autoHideOnSleep = menuItem.checked; },
       },
     ];
     // macOS: Dock and Menu Bar visibility toggles

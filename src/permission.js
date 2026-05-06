@@ -256,6 +256,7 @@ function repositionBubbles() {
 }
 
 function showPermissionBubble(permEntry) {
+  if (typeof ctx.autoShowIfNeeded === "function") ctx.autoShowIfNeeded();
   const sugCount = (permEntry.suggestions || []).length;
   const bh = estimateBubbleHeight(sugCount);
   // Temporary position — repositionBubbles() will finalize after renderer reports real height

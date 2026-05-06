@@ -52,6 +52,9 @@ const hostPrefix = readHostPrefix();
 
 // Map<filePath, { offset, sessionId, cwd, lastEventTime, lastState, partial }>
 const tracked = new Map();
+// 退役追踪：保留 offset 等元数据，避免重新追踪同一会话时重放旧事件
+const retiredTracked = new Map();
+const MAX_RETIRED = 100;
 
 // ── Core polling logic (mirrors agents/codex-log-monitor.js) ──
 
@@ -135,12 +138,15 @@ function pollFile(filePath, fileName) {
   if (!entry) {
     const sessionId = extractSessionId(fileName);
     if (!sessionId) return;
+    const retired = retiredTracked.get(filePath) || null;
+    const resumeOffset = retired && stat.size >= retired.offset ? retired.offset : 0;
+    if (retired) retiredTracked.delete(filePath);
     entry = {
-      offset: 0,
+      offset: resumeOffset,
       sessionId: "codex:" + sessionId,
-      cwd: "",
+      cwd: retired ? retired.cwd : "",
       lastEventTime: Date.now(),
-      lastState: null,
+      lastState: retired ? retired.lastState : null,
       partial: "",
     };
     tracked.set(filePath, entry);
@@ -175,8 +181,23 @@ function cleanStaleFiles() {
   for (const [filePath, entry] of tracked) {
     if (now - entry.lastEventTime > 300000) {
       postState(entry.sessionId, "sleeping", "stale-cleanup", entry.cwd);
-      tracked.delete(filePath);
+      retireTrackedFile(filePath, entry);
     }
+  }
+}
+
+function retireTrackedFile(filePath, entry) {
+  tracked.delete(filePath);
+  if (!filePath || !entry) return;
+  retiredTracked.delete(filePath);
+  retiredTracked.set(filePath, {
+    offset: Number.isFinite(entry.offset) ? entry.offset : 0,
+    cwd: entry.cwd || "",
+    lastState: entry.lastState || null,
+  });
+  while (retiredTracked.size > MAX_RETIRED) {
+    const oldest = retiredTracked.keys().next().value;
+    retiredTracked.delete(oldest);
   }
 }
 

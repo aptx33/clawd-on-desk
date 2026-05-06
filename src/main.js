@@ -176,6 +176,8 @@ function flushRuntimeStateToPrefs() {
   });
 }
 
+const CodexSubagentClassifier = require("../agents/codex-subagent-classifier");
+const _codexSubagentClassifier = new CodexSubagentClassifier();
 let _codexMonitor = null;          // Codex CLI JSONL log polling instance
 let _geminiMonitor = null;         // Gemini CLI session JSON polling instance
 
@@ -255,6 +257,54 @@ let petOpacity = _settingsController.get("petOpacity");
 let showSessionId = _settingsController.get("showSessionId");
 let soundMuted = _settingsController.get("soundMuted");
 let petHidden = false;
+let autoHideOnSleep = _settingsController.get("autoHideOnSleep");
+let autoHideDelayMs = _settingsController.get("autoHideDelayMs");
+let _autoHideTimer = null;
+let _autoHidden = false;
+
+function scheduleAutoHide() {
+  if (!autoHideOnSleep || petHidden || _autoHidden) return;
+  cancelAutoHide();
+  _autoHideTimer = setTimeout(() => {
+    _autoHideTimer = null;
+    if (petHidden || _autoHidden) return;
+    if (!win || win.isDestroyed()) return;
+    if (pendingPermissions.length > 0) {
+      scheduleAutoHide();
+      return;
+    }
+    const ubWin = _updateBubble.getBubbleWindow();
+    if (ubWin && !ubWin.isDestroyed() && ubWin.isVisible()) {
+      scheduleAutoHide();
+      return;
+    }
+    win.hide();
+    if (hitWin && !hitWin.isDestroyed()) hitWin.hide();
+    _autoHidden = true;
+    console.log("Clawd: auto-hidden (power save)");
+  }, autoHideDelayMs);
+}
+
+function cancelAutoHide() {
+  if (_autoHideTimer) { clearTimeout(_autoHideTimer); _autoHideTimer = null; }
+}
+
+function autoShowIfNeeded() {
+  cancelAutoHide();
+  if (!_autoHidden) return;
+  if (!win || win.isDestroyed()) return;
+  win.showInactive();
+  if (isLinux) win.setSkipTaskbar(true);
+  if (hitWin && !hitWin.isDestroyed()) {
+    hitWin.showInactive();
+    if (isLinux) hitWin.setSkipTaskbar(true);
+  }
+  reapplyMacVisibility();
+  applyPetOpacity();
+  _autoHidden = false;
+  console.log("Clawd: auto-shown (activity detected)");
+}
+
 const DEFAULT_TOGGLE_SHORTCUT = "CommandOrControl+Shift+Alt+C";
 const CURSOR_TOOL_STUCK_MS = 15000;
 const CURSOR_AWAITING_USER_MS = 1800;
@@ -265,6 +315,8 @@ const cursorAwaitingUserTimers = new Map();
 function togglePetVisibility() {
   if (!win || win.isDestroyed()) return;
   if (_mini.getMiniTransitioning()) return;
+  cancelAutoHide();
+  _autoHidden = false;
   if (petHidden) {
     win.showInactive();
     if (isLinux) win.setSkipTaskbar(true);
@@ -592,6 +644,17 @@ function activateMacTerminalApp() {
   activateMacAppFromList(["Terminal", "iTerm2", "iTerm", "Warp", "Ghostty", "WezTerm", "kitty", "Alacritty", "Hyper"], "Terminal");
 }
 
+function _isCursorRunning() {
+  if (!isMac) return false;
+  try {
+    const { execSync } = require("child_process");
+    const out = execSync("pgrep -x 'Cursor' 2>/dev/null || true", { timeout: 500, encoding: "utf8" });
+    return out.trim().length > 0;
+  } catch {
+    return false;
+  }
+}
+
 function shortSessionId(sessionId) {
   if (!sessionId || typeof sessionId !== "string") return "";
   const raw = sessionId.startsWith("codex:") ? sessionId.slice("codex:".length) : sessionId;
@@ -643,6 +706,7 @@ const _permCtx = {
   get aiStuckBubbles() { return aiStuckBubbles; },
   get aiDoneBubbles() { return aiDoneBubbles; },
   get petHidden() { return petHidden; },
+  autoShowIfNeeded: () => autoShowIfNeeded(),
   getNearestWorkArea,
   getHitRectScreen,
   guardAlwaysOnTop,
@@ -663,6 +727,12 @@ const _permCtx = {
       return;
     }
     if (s.agentId === "codex") {
+      // Codex 在 Cursor 插件中运行时 originator 为 "codex_vscode"，
+      // 此时优先跳到 Cursor 而非 Codex App
+      if (s.originator === "codex_vscode" && _isCursorRunning()) {
+        activateMacApp("Cursor");
+        return;
+      }
       activateMacCodexApp();
       return;
     }
@@ -759,6 +829,14 @@ const _stateCtx = {
   miniPeekOut: () => miniPeekOut(),
   buildContextMenu: () => buildContextMenu(),
   buildTrayMenu: () => buildTrayMenu(),
+  onStateApplied: (state) => {
+    const idleStates = new Set(["idle", "yawning", "dozing", "collapsing", "sleeping", "mini-idle", "mini-sleep"]);
+    if (idleStates.has(state)) {
+      if (!_autoHideTimer && !_autoHidden) scheduleAutoHide();
+    } else {
+      autoShowIfNeeded();
+    }
+  },
   hasAnyEnabledAgent: () => {
     // `get("agents")` returns the live reference (no clone) — we're only
     // reading. Missing agents field falls back to "assume enabled" (the
@@ -857,6 +935,14 @@ const _serverCtx = {
   replyOpencodePermission,
   permLog,
   noteAgentActivity,
+  onServerStateReceived: (state) => {
+    const activeStates = new Set(["working", "thinking", "juggling", "attention", "error", "notification", "sweeping", "carrying"]);
+    if (activeStates.has(state)) {
+      autoShowIfNeeded();
+    } else {
+      if (!_autoHideTimer && !_autoHidden) scheduleAutoHide();
+    }
+  },
 };
 const _server = require("./server")(_serverCtx);
 const { startHttpServer, getHookServerPort } = _server;
@@ -974,6 +1060,8 @@ const _menuCtx = {
   set showSessionId(v) { _settingsController.applyUpdate("showSessionId", v); },
   get soundMuted() { return soundMuted; },
   set soundMuted(v) { _settingsController.applyUpdate("soundMuted", v); },
+  get autoHideOnSleep() { return autoHideOnSleep; },
+  set autoHideOnSleep(v) { _settingsController.applyUpdate("autoHideOnSleep", v); },
   get pendingPermissions() { return pendingPermissions; },
   repositionBubbles: () => repositionFloatingBubbles(),
   get petHidden() { return petHidden; },
@@ -1034,6 +1122,7 @@ const { t, buildContextMenu, buildTrayMenu, rebuildAllMenus, createTray,
 const MENU_AFFECTING_KEYS = new Set([
   "lang", "soundMuted", "bubbleFollowPet", "hideBubbles", "aiStuckBubbles", "aiDoneBubbles",
   "petOpacity", "showSessionId", "autoStartWithClaude", "openAtLogin", "showTray", "showDock", "theme", "size",
+  "autoHideOnSleep",
 ]);
 function wireSettingsSubscribers() {
   _settingsController.subscribe(({ changes }) => {
@@ -1070,6 +1159,11 @@ function wireSettingsSubscribers() {
     if ("petOpacity" in changes) { petOpacity = changes.petOpacity; applyPetOpacity(); }
     if ("showSessionId" in changes) showSessionId = changes.showSessionId;
     if ("soundMuted" in changes) soundMuted = changes.soundMuted;
+    if ("autoHideOnSleep" in changes) {
+      autoHideOnSleep = changes.autoHideOnSleep;
+      if (!autoHideOnSleep) { cancelAutoHide(); autoShowIfNeeded(); }
+    }
+    if ("autoHideDelayMs" in changes) autoHideDelayMs = changes.autoHideDelayMs;
 
     // 2. Reactive side effects (mirror what the legacy setters / click handlers used to do).
     if ("hideBubbles" in changes) {
@@ -1776,18 +1870,20 @@ if (!gotTheLock) {
           noteAgentActivity({ sessionId: sid, state, event, agentId: "codex" });
           return;
         }
+        const headless = extra && extra.headless === true;
+        const originator = extra && extra.originator || null;
         if (state === "codex-permission") {
-          updateSession(sid, "notification", event, null, extra.cwd, null, null, null, "codex");
+          updateSession(sid, "notification", event, null, extra.cwd, null, null, null, "codex", null, false, null, originator);
           noteAgentActivity({ sessionId: sid, state, event, agentId: "codex" });
           showCodexNotifyBubble({
             sessionId: sid,
-            command: extra.permissionDetail?.command || "",
+            command: (extra && extra.permissionDetail && extra.permissionDetail.command) || "",
           });
           return;
         }
         noteAgentActivity({ sessionId: sid, state, event, agentId: "codex" });
-        updateSession(sid, state, event, null, extra.cwd, null, null, null, "codex");
-      });
+        updateSession(sid, state, event, null, extra.cwd, null, null, null, "codex", null, headless, null, originator);
+      }, { classifier: _codexSubagentClassifier });
       if (_isAgentEnabled(_settingsController.getSnapshot(), "codex")) {
         _codexMonitor.start();
       }
@@ -1819,6 +1915,7 @@ if (!gotTheLock) {
 
   app.on("before-quit", () => {
     isQuitting = true;
+    cancelAutoHide();
     flushRuntimeStateToPrefs();
     unregisterToggleShortcut();
     globalShortcut.unregisterAll();

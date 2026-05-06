@@ -277,6 +277,8 @@ function applyState(state, svgOverride) {
       }
     }, AUTO_RETURN_MS[state]);
   }
+
+  if (typeof ctx.onStateApplied === "function") ctx.onStateApplied(state);
 }
 
 // ── Wake poll ──
@@ -333,7 +335,7 @@ function pickDisplayHint(state, existing, incoming) {
 }
 
 // ── Session management ──
-function updateSession(sessionId, state, event, sourcePid, cwd, editor, pidChain, agentPid, agentId, host, headless, displayHint) {
+function updateSession(sessionId, state, event, sourcePid, cwd, editor, pidChain, agentPid, agentId, host, headless, displayHint, originator) {
   if (startupRecoveryActive) {
     startupRecoveryActive = false;
     if (startupRecoveryTimer) { clearTimeout(startupRecoveryTimer); startupRecoveryTimer = null; }
@@ -353,11 +355,12 @@ function updateSession(sessionId, state, event, sourcePid, cwd, editor, pidChain
   const srcAgentId = agentId || (existing && existing.agentId) || null;
   const srcHost = host || (existing && existing.host) || null;
   const srcHeadless = headless || (existing && existing.headless) || false;
+  const srcOriginator = originator || (existing && existing.originator) || null;
 
   const pidReachable = existing ? existing.pidReachable :
     (srcAgentPid ? isProcessAlive(srcAgentPid) : (srcPid ? isProcessAlive(srcPid) : false));
 
-  const base = { sourcePid: srcPid, cwd: srcCwd, editor: srcEditor, pidChain: srcPidChain, agentPid: srcAgentPid, agentId: srcAgentId, host: srcHost, headless: srcHeadless, pidReachable };
+  const base = { sourcePid: srcPid, cwd: srcCwd, editor: srcEditor, pidChain: srcPidChain, agentPid: srcAgentPid, agentId: srcAgentId, host: srcHost, headless: srcHeadless, pidReachable, originator: srcOriginator };
 
   // Evict oldest session if at capacity and this is a new session
   if (!existing && sessions.size >= MAX_SESSIONS) {

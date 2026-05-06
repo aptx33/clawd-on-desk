@@ -223,6 +223,9 @@ function startHttpServer() {
             res.end();
             return;
           }
+          if (typeof ctx.onServerStateReceived === "function") {
+            ctx.onServerStateReceived(state);
+          }
           if (ctx.STATE_SVGS[state]) {
             const sid = session_id || "default";
             if (state.startsWith("mini-") && !svg) {

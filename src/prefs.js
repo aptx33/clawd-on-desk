@@ -69,6 +69,12 @@ const SCHEMA = {
   },
   showSessionId: { type: "boolean", default: false },
   soundMuted: { type: "boolean", default: false },
+  autoHideOnSleep: { type: "boolean", default: true },
+  autoHideDelayMs: {
+    type: "number",
+    default: 30000,
+    validate: (v) => Number.isFinite(v) && v >= 5000 && v <= 300000,
+  },
   // Theme
   theme: { type: "string", default: "clawd" },
   // Phase 2/3 placeholders — schema reserves the keys so future migrations don't need v2.

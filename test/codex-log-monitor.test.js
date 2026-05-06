@@ -217,6 +217,80 @@ describe("CodexLogMonitor", () => {
     }, 200);
   });
 
+  it("should not replay old events after retirement tracks the same file again", async () => {
+    const testFile = path.join(dateDir, TEST_FILENAME);
+    fs.writeFileSync(testFile, [
+      '{"type":"session_meta","payload":{"cwd":"/tmp"}}',
+      '{"type":"event_msg","payload":{"type":"task_started"}}',
+      '{"type":"event_msg","payload":{"type":"task_complete"}}',
+    ].join("\n") + "\n");
+
+    const config = makeConfig(tmpDir);
+    const states = [];
+    monitor = new CodexLogMonitor(config, (sid, state) => {
+      states.push(state);
+    });
+    monitor.start();
+
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    assert.deepStrictEqual(states, ["idle", "thinking", "idle"]);
+
+    // 模拟退役：把 tracked 文件强制标记为旧，然后触发 prune
+    const tracked = monitor._tracked.get(testFile);
+    assert.ok(tracked);
+    tracked.lastEventTime = Date.now() - 301000;
+    monitor._retireTrackedFile(testFile, tracked);
+
+    states.length = 0;
+    fs.appendFileSync(testFile, '{"type":"event_msg","payload":{"type":"task_started"}}\n');
+    monitor._poll();
+
+    assert.deepStrictEqual(states, ["thinking"]);
+  });
+
+  it("should suppress subagent turn-end to idle instead of attention", async () => {
+    const testFile = path.join(dateDir, TEST_FILENAME);
+    // session_meta 带 source.subagent 标志
+    fs.writeFileSync(testFile, [
+      '{"type":"session_meta","payload":{"cwd":"/tmp","source":{"subagent":"guardian"}}}',
+      '{"type":"event_msg","payload":{"type":"task_started"}}',
+      '{"type":"response_item","payload":{"type":"function_call","name":"shell_command","arguments":"{\\"command\\":\\"ls\\"}"}}',
+      '{"type":"event_msg","payload":{"type":"exec_command_end"}}',
+      '{"type":"event_msg","payload":{"type":"task_complete"}}',
+    ].join("\n") + "\n");
+
+    const config = makeConfig(tmpDir);
+    const states = [];
+    monitor = new CodexLogMonitor(config, (sid, state) => {
+      states.push(state);
+    });
+    monitor.start();
+
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    // subagent 的 turn-end 应该是 idle，而不是 attention
+    const lastState = states[states.length - 1];
+    assert.strictEqual(lastState, "idle", `expected subagent turn-end to resolve to idle, got: ${JSON.stringify(states)}`);
+    assert.ok(!states.includes("attention"), "subagent should not emit attention");
+  });
+
+  it("should pass originator from session_meta in extra", async () => {
+    const testFile = path.join(dateDir, TEST_FILENAME);
+    fs.writeFileSync(testFile, [
+      '{"type":"session_meta","payload":{"cwd":"/tmp","originator":"codex_vscode"}}',
+    ].join("\n") + "\n");
+
+    const config = makeConfig(tmpDir);
+    let receivedExtra = null;
+    monitor = new CodexLogMonitor(config, (sid, state, event, extra) => {
+      receivedExtra = extra;
+    });
+    monitor.start();
+
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    assert.ok(receivedExtra, "should have received an event");
+    assert.strictEqual(receivedExtra.originator, "codex_vscode");
+  });
+
   it("should ignore unmapped event types", (_, done) => {
     const testFile = path.join(dateDir, TEST_FILENAME);
     fs.writeFileSync(testFile, [

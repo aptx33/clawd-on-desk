@@ -1,27 +1,41 @@
 // Codex CLI JSONL log monitor
 // Polls ~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl for state changes
-// Zero dependencies (node built-ins only)
+// Zero external dependencies (node built-ins + local Codex helpers only)
+//
+// Replay protection is two layers — change one, consider the other:
+//   1. Line-level: _processLine skips entries whose `timestamp` field is
+//      older than monitor start (minus 1.5s grace).
+//   2. File-level: retired tracked files remember their offset so
+//      re-tracking the same file doesn't replay already-seen lines.
 
 const fs = require("fs");
 const path = require("path");
 const os = require("os");
+const CodexSubagentClassifier = require("./codex-subagent-classifier");
 
 const APPROVAL_HEURISTIC_MS = 2000;
 const MAX_TRACKED_FILES = 50;
+const MAX_RETIRED_TRACKED_FILES = 100;
 const MAX_PARTIAL_BYTES = 65536;
 const RECENT_DAY_DIR_CACHE_MS = 60 * 60 * 1000; // 1 hour
+// 文件 mtime 早于 monitor 启动超过此阈值则视为历史会话，启用 backfill 模式
+const BACKFILL_GRACE_MS = 5000;
 
 class CodexLogMonitor {
   /**
    * @param {object} agentConfig - codex.js config (logConfig + logEventMap)
    * @param {function} onStateChange - (sessionId, state, event, extra) => void
+   * @param {object} options
    */
-  constructor(agentConfig, onStateChange) {
+  constructor(agentConfig, onStateChange, options = {}) {
     this._config = agentConfig;
     this._onStateChange = onStateChange;
+    this._classifier = options.classifier || new CodexSubagentClassifier();
     this._interval = null;
     // Map<filePath, { offset, sessionId, cwd, lastEventTime, lastState, partial }>
     this._tracked = new Map();
+    // 退役追踪：保留 offset/state 等元数据，避免重新追踪同一会话时重放旧事件
+    this._retiredTracked = new Map();
     this._baseDir = this._resolveBaseDir();
     this._recentDayDirsCache = [];
     this._recentDayDirsCacheAt = 0;
@@ -57,6 +71,7 @@ class CodexLogMonitor {
       if (tracked.approvalTimer) clearTimeout(tracked.approvalTimer);
     }
     this._tracked.clear();
+    this._retiredTracked.clear();
   }
 
   _poll() {
@@ -82,7 +97,7 @@ class CodexLogMonitor {
         this._pollFile(filePath, file);
       }
     }
-    this._cleanStaleFiles();
+    this._pruneTrackedFilesIfNeeded();
   }
 
   _getSessionDirs() {
@@ -183,19 +198,34 @@ class CodexLogMonitor {
       if (!sessionId) return;
       // Cap tracked files to prevent unbounded Map growth
       if (this._tracked.size >= MAX_TRACKED_FILES) {
-        this._cleanStaleFiles();
+        this._pruneTrackedFilesIfNeeded();
         if (this._tracked.size >= MAX_TRACKED_FILES) return;
       }
+      const retired = this._retiredTracked.get(filePath) || null;
+      const resumeOffset = retired && stat.size >= retired.offset ? retired.offset : 0;
+      if (retired) this._retiredTracked.delete(filePath);
       tracked = {
-        offset: 0,
+        offset: resumeOffset,
         sessionId: "codex:" + sessionId,
         filePath,
-        cwd: "",
+        cwd: retired ? retired.cwd : "",
+        sessionTitle: retired ? retired.sessionTitle : null,
         lastEventTime: Date.now(),
-        lastState: null,
+        lastState: retired ? retired.lastState : null,
+        lastStateEvent: retired ? retired.lastStateEvent : null,
+        hasEmittedState: retired ? retired.hasEmittedState === true : false,
         partial: "",
-        hadToolUse: false,
-        agentPid: null,
+        hadToolUse: retired ? retired.hadToolUse === true : false,
+        isSubagent: retired ? retired.isSubagent === true : false,
+        agentPid: retired ? retired.agentPid : null,
+        pendingApprovalDetail: null,
+        // Backfill 模式：文件 mtime 早于 monitor 启动（减去 BACKFILL_GRACE_MS）
+        // 视为历史会话，静默消费但不触发状态变更。
+        // 空文件无需 replay；grace window 内的视为活跃会话正常发射。
+        backfilling:
+          !retired &&
+          stat.size > 0 &&
+          stat.mtimeMs < this._startedAtMs - BACKFILL_GRACE_MS,
       };
       this._tracked.set(filePath, tracked);
     }
@@ -255,9 +285,14 @@ class CodexLogMonitor {
     // Build lookup key
     const key = subtype ? type + ":" + subtype : type;
 
-    // Extract CWD from session_meta
+    // Extract CWD and originator from session_meta
     if (type === "session_meta" && payload) {
       tracked.cwd = payload.cwd || "";
+      if (payload.originator) tracked.originator = payload.originator;
+      // 通过 session_meta 的 source 字段判断 subagent 角色
+      const role = this._classifier.registerSession(tracked.sessionId, { sessionMeta: payload });
+      if (role === "subagent") tracked.isSubagent = true;
+      else if (role === "root") tracked.isSubagent = false;
     }
 
     // Approval heuristic: exec_command_end or function_call_output means command finished —
@@ -284,21 +319,22 @@ class CodexLogMonitor {
     }
 
     // Turn-end: happy if tools were used this turn, idle otherwise
+    // Subagent 的 turn-end 始终映射为 idle，避免子任务完成闪 happy 动画
     if (state === "codex-turn-end") {
       if (tracked.approvalTimer) {
         clearTimeout(tracked.approvalTimer);
         tracked.approvalTimer = null;
       }
-      const resolved = tracked.hadToolUse ? "attention" : "idle";
+      tracked.pendingApprovalDetail = null;
+      const resolved = this._isTrackedSubagent(tracked)
+        ? "idle"
+        : (tracked.hadToolUse ? "attention" : "idle");
       tracked.hadToolUse = false;
       tracked.lastState = resolved;
+      if (tracked.backfilling) return;
+      tracked.hasEmittedState = true;
       tracked.lastEventTime = Date.now();
-      const agentPid = this._resolveTrackedAgentPid(tracked);
-      this._onStateChange(tracked.sessionId, resolved, key, {
-        cwd: tracked.cwd,
-        sourcePid: agentPid,
-        agentPid,
-      });
+      this._emitStateChange(tracked, resolved, key);
       return;
     }
 
@@ -338,13 +374,9 @@ class CodexLogMonitor {
     if (state === tracked.lastState && state === "working") return;
     tracked.lastState = state;
     tracked.lastEventTime = Date.now();
-
-    const agentPid = this._resolveTrackedAgentPid(tracked);
-    this._onStateChange(tracked.sessionId, state, key, {
-      cwd: tracked.cwd,
-      sourcePid: agentPid,
-      agentPid,
-    });
+    if (tracked.backfilling) return;
+    tracked.hasEmittedState = true;
+    this._emitStateChange(tracked, state, key);
   }
 
   // Extract shell command from function_call payload
@@ -436,21 +468,77 @@ class CodexLogMonitor {
     return null;
   }
 
-  // Remove files not updated for 5 minutes
-  _cleanStaleFiles() {
-    const now = Date.now();
-    for (const [filePath, tracked] of this._tracked) {
-      const age = now - tracked.lastEventTime;
-      if (age > 300000) {
-        // 5 min stale — notify session end and stop tracking
-        if (tracked.approvalTimer) clearTimeout(tracked.approvalTimer);
-        this._onStateChange(tracked.sessionId, "sleeping", "stale-cleanup", {
-          cwd: tracked.cwd,
-          sourcePid: tracked.agentPid,
-          agentPid: tracked.agentPid,
-        });
-        this._tracked.delete(filePath);
-      }
+  _isTrackedSubagent(tracked) {
+    if (!tracked) return false;
+    const role = this._classifier && typeof this._classifier.classify === "function"
+      ? this._classifier.classify(tracked.sessionId)
+      : "unknown";
+    if (role === "subagent") {
+      tracked.isSubagent = true;
+      return true;
+    }
+    if (role === "root") {
+      tracked.isSubagent = false;
+      return false;
+    }
+    return tracked.isSubagent === true;
+  }
+
+  _emitStateChange(tracked, state, event, extra = null) {
+    tracked.lastState = state;
+    tracked.lastEventTime = Date.now();
+    const agentPid = this._resolveTrackedAgentPid(tracked);
+    this._onStateChange(tracked.sessionId, state, event, {
+      cwd: tracked.cwd,
+      sourcePid: typeof agentPid === "number" && Number.isFinite(agentPid)
+        ? agentPid
+        : agentPid,
+      agentPid,
+      sessionTitle: tracked.sessionTitle,
+      originator: tracked.originator,
+      ...(extra || {}),
+      headless: this._isTrackedSubagent(tracked)
+        ? true
+        : (extra && Object.prototype.hasOwnProperty.call(extra, "headless") ? extra.headless : undefined),
+    });
+  }
+
+  // 按年龄淘汰追踪文件，优先淘汰从未发射过状态的文件
+  _pruneTrackedFilesIfNeeded() {
+    if (this._tracked.size < MAX_TRACKED_FILES) return;
+    const byAge = (a, b) => (a[1].lastEventTime || 0) - (b[1].lastEventTime || 0);
+    const neverEmitted = [...this._tracked.entries()]
+      .filter(([, tracked]) => tracked && !tracked.hasEmittedState)
+      .sort(byAge);
+    const emitted = [...this._tracked.entries()]
+      .filter(([, tracked]) => tracked && tracked.hasEmittedState)
+      .sort(byAge);
+    for (const [filePath, tracked] of [...neverEmitted, ...emitted]) {
+      if (this._tracked.size < MAX_TRACKED_FILES) break;
+      this._retireTrackedFile(filePath, tracked);
+    }
+  }
+
+  _retireTrackedFile(filePath, tracked) {
+    if (tracked && tracked.approvalTimer) clearTimeout(tracked.approvalTimer);
+    this._tracked.delete(filePath);
+    if (!filePath || !tracked) return;
+    this._retiredTracked.delete(filePath);
+    this._retiredTracked.set(filePath, {
+      offset: Number.isFinite(tracked.offset) ? tracked.offset : 0,
+      cwd: tracked.cwd || "",
+      sessionTitle: tracked.sessionTitle || null,
+      lastState: tracked.lastState || null,
+      lastStateEvent: tracked.lastStateEvent || null,
+      hasEmittedState: tracked.hasEmittedState === true,
+      hadToolUse: tracked.hadToolUse === true,
+      isSubagent: tracked.isSubagent === true,
+      agentPid: tracked.agentPid || null,
+      originator: tracked.originator || null,
+    });
+    while (this._retiredTracked.size > MAX_RETIRED_TRACKED_FILES) {
+      const oldest = this._retiredTracked.keys().next().value;
+      this._retiredTracked.delete(oldest);
     }
   }
 }

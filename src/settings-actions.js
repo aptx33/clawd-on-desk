@@ -143,6 +143,16 @@ const updateRegistry = {
     return { status: "ok" };
   },
   showSessionId: requireBoolean("showSessionId"),
+  autoHideOnSleep: requireBoolean("autoHideOnSleep"),
+  autoHideDelayMs(value) {
+    if (typeof value !== "number" || !Number.isFinite(value)) {
+      return { status: "error", message: "autoHideDelayMs must be a finite number" };
+    }
+    if (value < 5000 || value > 300000) {
+      return { status: "error", message: "autoHideDelayMs must be between 5000 and 300000" };
+    }
+    return { status: "ok" };
+  },
 
   // ── System-backed prefs (object-form: validate + effect pre-commit gate) ──
   //
