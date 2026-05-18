@@ -86,7 +86,15 @@ module.exports = function initMenu(ctx) {
     }
     ctx.tray = new Tray(icon);
     ctx.tray.setToolTip("Clawd Desktop Pet");
-    buildTrayMenu();
+    // [quota] 左键点击弹出额度面板
+    ctx.tray.on("click", () => {
+      if (ctx.toggleQuotaPanel) ctx.toggleQuotaPanel();
+    });
+    // 右键弹出原生系统菜单（不用 setContextMenu 避免左键也弹菜单）
+    ctx.tray.on("right-click", () => {
+      popUpTrayMenu();
+    });
+    _buildTrayMenuTemplate();
   }
 
   function destroyTray() {
@@ -108,8 +116,9 @@ module.exports = function initMenu(ctx) {
     ctx.reapplyMacVisibility();
   }
 
-  function buildTrayMenu() {
-    if (!ctx.tray) return;
+  let _trayMenu = null;
+
+  function _buildTrayMenuTemplate() {
     const items = [
       {
         label: ctx.doNotDisturb ? t("wake") : t("sleep"),
@@ -236,7 +245,17 @@ module.exports = function initMenu(ctx) {
       { type: "separator" },
       { label: t("quit"), click: () => requestAppQuit() },
     );
-    ctx.tray.setContextMenu(Menu.buildFromTemplate(items));
+    _trayMenu = Menu.buildFromTemplate(items);
+  }
+
+  function buildTrayMenu() {
+    _buildTrayMenuTemplate();
+  }
+
+  function popUpTrayMenu() {
+    if (!ctx.tray) return;
+    _buildTrayMenuTemplate();
+    if (_trayMenu) ctx.tray.popUpContextMenu(_trayMenu);
   }
 
   function rebuildAllMenus() {
@@ -580,6 +599,7 @@ module.exports = function initMenu(ctx) {
     applyDockVisibility,
     ensureContextMenuOwner,
     popupMenuAt,
+    popUpTrayMenu,
     showPetContextMenu,
     resizeWindow,
     requestAppQuit,

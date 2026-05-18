@@ -45,6 +45,13 @@ function startMainTick() {
   mainTickTimer = setInterval(() => {
     if (!ctx.win || ctx.win.isDestroyed()) return;
 
+    // [quota] 宠物隐藏时不再响应 hover，避免旧位置残留命中导致额度面板误弹出
+    if (ctx.isPetVisible && !ctx.isPetVisible()) {
+      if (ctx.mouseOverPet && ctx.onPetHoverLeave) ctx.onPetHoverLeave();
+      ctx.mouseOverPet = false;
+      return;
+    }
+
     // ── Idle state edge detection (must run every tick for timer cleanup) ──
     const idleNow = ctx.currentState === "idle" && !ctx.idlePaused;
     const miniIdleNow = ctx.currentState === "mini-idle" && !ctx.idlePaused && !ctx.miniTransitioning;
@@ -68,6 +75,19 @@ function startMainTick() {
     }
     idleWasActive = idleNow;
 
+    // [quota] hover 检测在所有状态下都生效（不依赖 idleNow）
+    if (!ctx.dragLocked) {
+      const qCursor = screen.getCursorScreenPoint();
+      const qBounds = ctx.win.getBounds();
+      const qHit = ctx.getHitRectScreen(qBounds);
+      const qOver = qCursor.x >= qHit.left && qCursor.x <= qHit.right
+                 && qCursor.y >= qHit.top  && qCursor.y <= qHit.bottom;
+      const qWasOver = ctx.mouseOverPet;
+      ctx.mouseOverPet = qOver;
+      if (qOver && !qWasOver && ctx.onPetHoverEnter) ctx.onPetHoverEnter();
+      if (!qOver && qWasOver && ctx.onPetHoverLeave) ctx.onPetHoverLeave();
+    }
+
     // Skip expensive native IPC calls (getCursorScreenPoint, getBounds) when
     // cursor tracking is not needed — saves ~20 calls/sec to the OS layer.
     const needsCursorPoll = idleNow || miniIdleNow || ctx.miniMode;
@@ -77,12 +97,6 @@ function startMainTick() {
 
     // ── Cursor-over-pet tracking (for mini peek + eye tracking, NOT for input routing) ──
     const bounds = ctx.win.getBounds();
-    if (!ctx.dragLocked) {
-      const hit = ctx.getHitRectScreen(bounds);
-      const over = cursor.x >= hit.left && cursor.x <= hit.right
-                && cursor.y >= hit.top  && cursor.y <= hit.bottom;
-      ctx.mouseOverPet = over;
-    }
 
     // ── Mini mode peek hover ──
     if (ctx.miniMode && !ctx.miniTransitioning && !ctx.dragLocked && !ctx.menuOpen) {

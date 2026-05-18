@@ -262,6 +262,14 @@ let autoHideDelayMs = _settingsController.get("autoHideDelayMs");
 let _autoHideTimer = null;
 let _autoHidden = false;
 
+function _hasActiveNonHeadlessSession() {
+  const idleStates = new Set(["idle", "sleeping"]);
+  for (const s of sessions.values()) {
+    if (!s.headless && !idleStates.has(s.state)) return true;
+  }
+  return false;
+}
+
 function scheduleAutoHide() {
   if (!autoHideOnSleep || petHidden || _autoHidden) return;
   cancelAutoHide();
@@ -278,8 +286,15 @@ function scheduleAutoHide() {
       scheduleAutoHide();
       return;
     }
+    // 有活跃的非 headless session 时不隐藏，重新调度
+    if (_hasActiveNonHeadlessSession()) {
+      scheduleAutoHide();
+      return;
+    }
     win.hide();
     if (hitWin && !hitWin.isDestroyed()) hitWin.hide();
+    if (_quotaPanel) _quotaPanel.hidePanel();
+    mouseOverPet = false;
     _autoHidden = true;
     console.log("Clawd: auto-hidden (power save)");
   }, autoHideDelayMs);
@@ -337,6 +352,8 @@ function togglePetVisibility() {
   } else {
     win.hide();
     if (hitWin && !hitWin.isDestroyed()) hitWin.hide();
+    if (_quotaPanel) _quotaPanel.hidePanel();
+    mouseOverPet = false;
     // Also hide any permission bubbles
     for (const perm of pendingPermissions) {
       if (perm.bubble && !perm.bubble.isDestroyed()) perm.bubble.hide();
@@ -553,7 +570,7 @@ function showAgentDone(sessionId, agentId) {
   });
 }
 
-function noteAgentActivity({ sessionId, state, event, agentId, toolName, responsePreview }) {
+function noteAgentActivity({ sessionId, state, event, agentId, toolName, responsePreview, headless }) {
   if (!sessionId || !agentId) return;
 
   if (agentId === "cursor-agent") {
@@ -586,7 +603,8 @@ function noteAgentActivity({ sessionId, state, event, agentId, toolName, respons
     }
     clearAgentNotifyBubbles(sessionId, "codex-stuck");
     if (state !== "codex-permission") clearCodexNotifyBubbles(sessionId);
-    if (event === "event_msg:task_complete") showAgentDone(sessionId, agentId);
+    // 只有非 headless 的根会话完成才弹通知，subagent（guardian 等）不弹
+    if (event === "event_msg:task_complete" && !headless) showAgentDone(sessionId, agentId);
   }
 }
 
@@ -908,9 +926,17 @@ const _tickCtx = {
   miniPeekOut: () => miniPeekOut(),
   getObjRect,
   getHitRectScreen,
+  // [quota] hover callbacks
+  onPetHoverEnter: () => { if (_quotaPanel) _quotaPanel.scheduleHoverShow(); },
+  onPetHoverLeave: () => { if (_quotaPanel) _quotaPanel.scheduleHoverHide(); },
+  isPetVisible: () => !!(win && !win.isDestroyed() && win.isVisible() && hitWin && !hitWin.isDestroyed() && hitWin.isVisible() && !petHidden && !_autoHidden),
 };
 const _tick = require("./tick")(_tickCtx);
 const { startMainTick, resetIdleTimer } = _tick;
+
+// [quota] AI quota monitoring — lazy init (needs _mini which is defined later)
+let _quotaModule = null;
+let _quotaPanel = null;
 
 // ── Terminal focus — delegated to src/focus.js ──
 const _focus = require("./focus")({ _allowSetForeground });
@@ -1105,10 +1131,12 @@ const _menuCtx = {
   getActiveThemeId: () => activeTheme ? activeTheme._id : "clawd",
   ensureUserThemesDir: () => themeLoader.ensureUserThemesDir(),
   openSettingsWindow: () => openSettingsWindow(),
+  // [quota] 托盘左键点击弹出额度面板（late-binding：_quotaPanel 在 _tick 之后初始化）
+  toggleQuotaPanel: () => { if (_quotaPanel) _quotaPanel.toggleTray(); },
 };
 const _menu = require("./menu")(_menuCtx);
 const { t, buildContextMenu, buildTrayMenu, rebuildAllMenus, createTray,
-        destroyTray, showPetContextMenu, popupMenuAt, ensureContextMenuOwner,
+        destroyTray, showPetContextMenu, popupMenuAt, popUpTrayMenu, ensureContextMenuOwner,
         requestAppQuit, applyDockVisibility } = _menu;
 
 // ── Settings subscribers ──
@@ -1615,6 +1643,34 @@ function createWindow() {
   guardAlwaysOnTop(win);
   startTopmostWatchdog();
 
+  // [quota] AI quota monitoring — init here so _mini is available
+  _quotaModule = require("./quota")({
+    get win() { return win; },
+    get tray() { return tray; },
+    get miniMode() { return _mini.getMiniMode(); },
+    get pendingPermissions() { return pendingPermissions; },
+    getQuotaPref: (key) => _settingsController.get(key),
+    setQuotaPref: (key, value) => _settingsController.applyUpdate(key, value),
+    getHitRectScreen,
+    getNearestWorkArea,
+  });
+  _quotaPanel = require("./quota-panel")({
+    get win() { return win; },
+    get tray() { return tray; },
+    get miniMode() { return _mini.getMiniMode(); },
+    isPetVisible: () => !!(win && !win.isDestroyed() && win.isVisible() && hitWin && !hitWin.isDestroyed() && hitWin.isVisible() && !petHidden && !_autoHidden),
+    get pendingPermissions() { return pendingPermissions; },
+    getQuotaPref: (key) => _settingsController.get(key),
+    setQuotaPref: (key, value) => _settingsController.applyUpdate(key, value),
+    getQuotaData: () => _quotaModule.getQuotaData(),
+    refreshQuota: () => _quotaModule.refresh(),
+    onQuotaUpdate: (fn) => _quotaModule.onUpdate(fn),
+    popUpTrayMenu: () => popUpTrayMenu(),
+    getHitRectScreen,
+    getNearestWorkArea,
+  });
+  _quotaModule.start();
+
   // ── Display change: re-clamp window to prevent off-screen ──
   // In proportional mode, also recalculate size based on the new work area.
   screen.on("display-metrics-changed", () => {
@@ -1874,14 +1930,15 @@ if (!gotTheLock) {
         const originator = extra && extra.originator || null;
         if (state === "codex-permission") {
           updateSession(sid, "notification", event, null, extra.cwd, null, null, null, "codex", null, false, null, originator);
-          noteAgentActivity({ sessionId: sid, state, event, agentId: "codex" });
+          noteAgentActivity({ sessionId: sid, state, event, agentId: "codex", headless: false });
           showCodexNotifyBubble({
             sessionId: sid,
             command: (extra && extra.permissionDetail && extra.permissionDetail.command) || "",
           });
           return;
         }
-        noteAgentActivity({ sessionId: sid, state, event, agentId: "codex" });
+        // headless subagent 的事件不触发通知弹窗
+        noteAgentActivity({ sessionId: sid, state, event, agentId: "codex", headless });
         updateSession(sid, state, event, null, extra.cwd, null, null, null, "codex", null, headless, null, originator);
       }, { classifier: _codexSubagentClassifier });
       if (_isAgentEnabled(_settingsController.getSnapshot(), "codex")) {

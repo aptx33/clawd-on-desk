@@ -1,10 +1,10 @@
-# CLAUDE.md
+# AGENTS.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to Codex (Codex.ai/code) when working with code in this repository.
 
 ## 项目概述
 
-Clawd 桌宠 — 一个 Electron 桌面宠物，通过 hook 系统和日志轮询实时感知 AI coding agent 的工作状态并播放对应的像素风 SVG 动画。支持 **Claude Code**（command + HTTP hook）、**Codex CLI**（JSONL 日志轮询）、**Copilot CLI**（command hook）、**Cursor Agent**（`~/.cursor/hooks.json`，stdin JSON + stdout JSON）、**Gemini CLI**（session JSON 轮询）、**opencode**（in-process plugin + 反向 HTTP bridge）并行运行。支持 Windows、macOS 和 Linux。
+Clawd 桌宠 — 一个 Electron 桌面宠物，通过 hook 系统和日志轮询实时感知 AI coding agent 的工作状态并播放对应的像素风 SVG 动画。支持 **Codex**（command + HTTP hook）、**Codex CLI**（JSONL 日志轮询）、**Copilot CLI**（command hook）、**Cursor Agent**（`~/.cursor/hooks.json`，stdin JSON + stdout JSON）、**Gemini CLI**（session JSON 轮询）、**opencode**（in-process plugin + 反向 HTTP bridge）并行运行。支持 Windows、macOS 和 Linux。
 
 ## 常用命令
 
@@ -15,7 +15,7 @@ npm run build:mac      # electron-builder 打包 macOS DMG（x64 + arm64）
 npm run build:linux    # electron-builder 打包 Linux AppImage + deb
 npm run build:all      # 同时打包 Windows + macOS + Linux
 npm install            # 安装依赖（electron + electron-builder）
-node hooks/install.js       # 注册 Claude Code hooks 到 ~/.claude/settings.json
+node hooks/install.js       # 注册 Codex hooks 到 ~/.Codex/settings.json
 npm run install:cursor-hooks # 注册 Cursor Agent hooks 到 ~/.cursor/hooks.json
 npm run install:gemini-hooks # 注册 Gemini CLI hooks 到 ~/.gemini/settings.json
 npm test               # 运行单元测试（node --test test/*.test.js）
@@ -42,8 +42,8 @@ bash test-macos.sh     # macOS 适配测试（需先 npm start）
 ## 架构与数据流
 
 ```
-Claude Code 状态同步（command hook，非阻塞）：
-  Claude Code 触发事件
+Codex 状态同步（command hook，非阻塞）：
+  Codex 触发事件
     → hooks/clawd-hook.js（零依赖 Node 脚本，stdin 读 JSON 取 session_id + source_pid）
     → HTTP POST 127.0.0.1:23333/state { state, session_id, event, source_pid, cwd }
     → src/server.js 路由 → src/state.js 状态机（多会话追踪 + 优先级 + 最小显示时长 + 睡眠序列）
@@ -85,16 +85,16 @@ opencode 权限气泡（event hook + 反向 bridge，非阻塞）：
     → opencode 执行对应行为（once/always/reject）
 
 远程 SSH 状态同步（反向端口转发）：
-  远程服务器上的 Claude Code / Codex CLI
+  远程服务器上的 Codex / Codex CLI
     → hooks 通过 SSH 隧道 POST 到本地 127.0.0.1:23333
     → 同上状态机（CLAWD_REMOTE=1 模式跳过 PID 收集）
 
-权限决策流（Claude Code HTTP hook，阻塞）：
-  Claude Code PermissionRequest
+权限决策流（Codex HTTP hook，阻塞）：
+  Codex PermissionRequest
     → HTTP POST 127.0.0.1:23333/permission { tool_name, tool_input, session_id, permission_suggestions }
     → main.js 创建 bubble 窗口（bubble.html）显示权限卡片
     → 用户点击 Allow / Deny / suggestion → HTTP 响应 { behavior }
-    → Claude Code 执行对应行为
+    → Codex 执行对应行为
 ```
 
 ### 双窗口架构（输入/渲染分离）
@@ -110,7 +110,7 @@ opencode 权限气泡（event hook + 反向 bridge，非阻塞）：
 ### 多 Agent 架构（agents/）
 
 每个 agent 定义为一个配置模块，导出事件映射、进程名、能力声明：
-- `agents/claude-code.js` — Claude Code 事件映射 + 能力（hooks、permission、terminal focus）
+- `agents/Codex.js` — Codex 事件映射 + 能力（hooks、permission、terminal focus）
 - `agents/codex.js` — Codex CLI JSONL 事件映射 + 轮询配置
 - `agents/copilot-cli.js` — Copilot CLI camelCase 事件映射
 - `agents/cursor-agent.js` — Cursor Agent（hooks.json）事件映射
@@ -140,7 +140,7 @@ opencode 权限气泡（event hook + 反向 bridge，非阻塞）：
 | `src/preload.js` | 渲染窗口 contextBridge（onStateChange、onEyeMove、reaction 接收、pauseCursorPolling） |
 | `src/bubble.html` | 权限气泡 UI：工具名 pill + 命令预览 + Allow/Deny 按钮 + suggestion 按钮，支持 light/dark 主题 |
 | `src/preload-bubble.js` | bubble 窗口的 contextBridge（permission-show、permission-decide、bubble-height） |
-| `hooks/clawd-hook.js` | Claude Code command hook：事件名 → 状态映射 → HTTP POST，零依赖 |
+| `hooks/clawd-hook.js` | Codex command hook：事件名 → 状态映射 → HTTP POST，零依赖 |
 | `hooks/copilot-hook.js` | Copilot CLI command hook：camelCase 事件名，与 clawd-hook.js 相同架构 |
 | `hooks/gemini-hook.js` | Gemini CLI command hook：事件名 → 状态映射 → HTTP POST，与 clawd-hook.js 相同架构 |
 | `hooks/gemini-install.js` | 安全注册 Gemini hooks 到 ~/.gemini/settings.json，导出 `registerGeminiHooks()` |
@@ -202,7 +202,7 @@ opencode 权限气泡（event hook + 反向 bridge，非阻塞）：
 - **动态高度**：bubble 通过 IPC `bubble-height` 上报实际渲染高度，主进程据此精确堆叠
 - **决策选项**：Allow（允许）、Deny（拒绝）、suggestion 按钮（如"始终允许"、"自动接受编辑"）
 - **全局快捷键**：`Ctrl+Shift+Y`（Allow）/ `Ctrl+Shift+N`（Deny）操作最新的可操作气泡（排除 elicitation/codex notify/ExitPlanMode），仅在气泡可见时注册，hideBubbles/petHidden 时注销
-- **客户端断连**：`res.on("close")` 检测 Claude Code 超时或用户在终端回答，自动清理气泡
+- **客户端断连**：`res.on("close")` 检测 Codex 超时或用户在终端回答，自动清理气泡
 - **DND 模式**：休眠时自动 deny 所有权限请求，不弹气泡
 - **suggestion 格式**：支持 `addRules`（权限规则）和 `setMode`（切换模式）两种类型
 - **Codex 通知气泡**：Codex CLI 无法使用阻塞式 HTTP hook，通过 JSONL 日志检测 `exec_approval_request` / `apply_patch_approval_request` 触发通知气泡，仅提供 Dismiss 按钮（无 Allow/Deny），30 秒自动过期
@@ -341,7 +341,7 @@ opencode 是唯一**以 plugin 形式集成**的 agent，其他 agent 都是 hoo
 ## 开发规范
 
 - 敏感信息只放 `.env`，禁止硬编码
-- 注册 Claude Code hook 时必须**追加**到已有 hook 数组，不能覆盖
+- 注册 Codex hook 时必须**追加**到已有 hook 数组，不能覆盖
 - HTTP 服务端口范围 `127.0.0.1:23333-23337`，运行时端口写入 `~/.clawd/runtime.json`，退出时清理；全部占用时降级为 idle-only 模式
 - hook 脚本仅依赖 Node 内置模块 + 同目录的 `server-config.js`（端口发现/签名验证），禁止引入三方包
 - main.js 启动时自动调用 `registerHooks({ silent: true })` 注册缺失的 hooks
@@ -351,7 +351,7 @@ opencode 是唯一**以 plugin 形式集成**的 agent，其他 agent 都是 hoo
 ## 已知限制
 
 - **hitWin 点击会抢焦点**：输入窗口 `focusable: true` 是修复拖拽 bug 的关键（去掉 WS_EX_NOACTIVATE），但副作用是点击桌宠会短暂抢走编辑器焦点。目前认为可接受，暂不处理。
-- **启动恢复**：桌宠在 agent 会话中途启动时，`detectRunningClaudeProcesses()` 会检测已运行的 Claude 进程并激活 `startupRecoverActive` 标志，抑制 idle→sleep 序列，保持 idle-follow 等待 hook 到来；若未检测到进程则保持 idle 直到下一个 hook 事件触发
+- **启动恢复**：桌宠在 agent 会话中途启动时，`detectRunningClaudeProcesses()` 会检测已运行的 Codex 进程并激活 `startupRecoverActive` 标志，抑制 idle→sleep 序列，保持 idle-follow 等待 hook 到来；若未检测到进程则保持 idle 直到下一个 hook 事件触发
 - **Windows 前台窗口锁**：已通过 ALT key trick + koffi FFI `AllowSetForegroundWindow` 委托前台权限给 PowerShell helper 进程来绕过。菜单点击时 Electron 持有前台权限，通过 `AllowSetForegroundWindow(psProc.pid)` 委托给 PS 进程，PS 进程再用 ALT keybd_event + `SetForegroundWindow` 激活目标窗口。大多数场景有效，但仍有边缘情况可能失败（PID 不匹配终端窗口、PS helper 未初始化、koffi 加载失败等）
 - hook 脚本依赖 Node.js 可用
 - Windows 终端聚焦依赖 `koffi`（FFI 调用 `user32.dll AllowSetForegroundWindow`），koffi 加载失败时降级为纯 ALT trick；macOS 用 `osascript`

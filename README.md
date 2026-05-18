@@ -34,9 +34,6 @@ Ported from upstream — when Codex spawns subagent sessions (e.g. guardian asse
 ### Opacity Slider
 Adjust the pet's transparency via the Settings panel or right-click menu. Useful on small screens or when Clawd overlaps with content you need to read.
 
-### Portrait Display Support
-Clawd properly positions itself on portrait-oriented displays (vertical monitors), with correct clamping and edge detection.
-
 ## Upstream Features
 
 All features from the original project are preserved:

@@ -97,6 +97,24 @@ const SCHEMA = {
     defaultFactory: () => ({}),
     normalize: normalizeThemeOverrides,
   },
+  // [quota] AI quota monitoring preferences
+  quotaEnabled: { type: "boolean", default: true },
+  quotaCpaKey: { type: "string", default: "" },
+  quotaCursorClientId: { type: "string", default: "" },
+  quotaRefreshInterval: {
+    type: "number",
+    default: 300000,
+    validate: (v) => Number.isFinite(v) && v >= 30000 && v <= 3600000,
+  },
+  quotaCursorTotal: {
+    type: "number",
+    default: 500,
+    validate: (v) => Number.isFinite(v) && v > 0,
+  },
+  quotaShowCursor: { type: "boolean", default: true },
+  quotaShowCodex: { type: "boolean", default: true },
+  quotaShowAntigravity: { type: "boolean", default: true },
+  quotaShowGemini: { type: "boolean", default: true },
 };
 
 const SCHEMA_KEYS = Object.freeze(Object.keys(SCHEMA));

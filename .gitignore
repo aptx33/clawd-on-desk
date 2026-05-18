@@ -59,5 +59,8 @@ scripts/*
 # oh-my-cursor state
 .omc/
 
+# Quota secrets (CPA key, OAuth client_id)
+quota-secrets.json
+
 # Cursor local config (MCP, rules from omc setup)
 .cursor/
